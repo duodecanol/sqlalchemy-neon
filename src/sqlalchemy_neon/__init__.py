@@ -39,7 +39,6 @@ from .errors import (
     NeonConfigurationError,
 )
 
-from .pool import PoolQuery, PoolQueryResult, execute_pool_query, execute_pool_queries
 from .native_async_engine import (
     NeonNativeAsyncEngine,
     NativeAsyncResult,
@@ -55,11 +54,6 @@ __all__ = [
     "NativeAsyncResult",
     "create_neon_native_async_engine",
     "compile_sql",
-    # Query helpers
-    "PoolQuery",
-    "PoolQueryResult",
-    "execute_pool_query",
-    "execute_pool_queries",
     # HTTP client
     "AsyncNeonHTTPClient",
     "NeonHTTPClient",

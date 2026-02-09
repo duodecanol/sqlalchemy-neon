@@ -20,6 +20,7 @@ from contextlib import contextmanager
 
 # Monkey-patch before any other imports
 from gevent import monkey
+
 # monkey.patch_select()
 # monkey.patch_selectors()
 # monkey.patch_socket()
@@ -54,7 +55,9 @@ def timer(label: str, container: dict):
 def print_greenlet_info(prefix: str = ""):
     """Print current greenlet information"""
     current = greenlet.getcurrent()
-    print(f"  {prefix}Current greenlet: {current}, id={id(current)}, is_main={current.parent is None}")
+    print(
+        f"  {prefix}Current greenlet: {current}, id={id(current)}, is_main={current.parent is None}"
+    )
 
 
 # =============================================================================
@@ -75,7 +78,7 @@ def test_requests_sync():
             resp = requests.get(TEST_URL, timeout=10)
             elapsed = time.perf_counter() - start
             results.append(elapsed)
-            print(f"    Request {i+1}: {resp.status_code} in {elapsed:.3f}s")
+            print(f"    Request {i + 1}: {resp.status_code} in {elapsed:.3f}s")
 
     print(f"  Average per request: {statistics.mean(results):.3f}s")
     print_greenlet_info("After: ")
@@ -101,10 +104,17 @@ def test_geventhttpclient_sync():
         for i in range(NUM_REQUESTS):
             start = time.perf_counter()
             resp = client.get(url.request_uri)
+            if resp is None or resp.status_code != 200:
+                print(
+                    f"    Request {i + 1}: FAILED with status {resp.status_code if resp else 'No Response'}"
+                )
+                continue
             body = resp.read()
             elapsed = time.perf_counter() - start
             results.append(elapsed)
-            print(f"    Request {i+1}: {resp.status_code} in {elapsed:.3f}s, body_len={len(body)}")
+            print(
+                f"    Request {i + 1}: {resp.status_code} in {elapsed:.3f}s, body_len={len(body)}"
+            )
 
     client.close()
     print(f"  Average per request: {statistics.mean(results):.3f}s")
@@ -142,7 +152,7 @@ def test_getcurrent_only():
         resp = client.get(url.request_uri)
         body = resp.read()
         elapsed = time.perf_counter() - start
-        return idx, resp.status_code, elapsed, current
+        return idx, resp.status_code if resp else 0, elapsed, current
 
     results = []
     container = {}
@@ -153,12 +163,16 @@ def test_getcurrent_only():
             idx, status, elapsed, gr = make_request(i)
             results.append(elapsed)
             greenlet_ids.add(id(gr))
-            print(f"    Request {idx+1}: {status} in {elapsed:.3f}s, greenlet_id={id(gr)}")
+            print(
+                f"    Request {idx + 1}: {status} in {elapsed:.3f}s, greenlet_id={id(gr)}"
+            )
 
     client.close()
     print(f"\n  Unique greenlets used: {len(greenlet_ids)}")
     print(f"  Average per request: {statistics.mean(results):.3f}s")
-    print(f"  RESULT: {'SEQUENTIAL (as expected)' if len(greenlet_ids) == 1 else 'UNEXPECTED - multiple greenlets!'}")
+    print(
+        f"  RESULT: {'SEQUENTIAL (as expected)' if len(greenlet_ids) == 1 else 'UNEXPECTED - multiple greenlets!'}"
+    )
     print_greenlet_info("After: ")
     return results, container
 
@@ -194,7 +208,9 @@ def test_gevent_spawn_parallel():
         elapsed = time.perf_counter() - start
         greenlet_ids.add(id(current))
         results.append((idx, resp.status_code, elapsed, id(current)))
-        print(f"    Request {idx+1}: {resp.status_code} in {elapsed:.3f}s, greenlet_id={id(current)}")
+        print(
+            f"    Request {idx + 1}: {resp.status_code} in {elapsed:.3f}s, greenlet_id={id(current)}"
+        )
         return elapsed
 
     with timer(f"{NUM_REQUESTS} parallel requests with gevent.spawn", container):
@@ -205,7 +221,9 @@ def test_gevent_spawn_parallel():
     times = [r[2] for r in results]
     print(f"\n  Unique greenlets used: {len(greenlet_ids)}")
     print(f"  Average per request: {statistics.mean(times):.3f}s")
-    print(f"  RESULT: {'PARALLEL (as expected)' if len(greenlet_ids) > 1 else 'UNEXPECTED - single greenlet!'}")
+    print(
+        f"  RESULT: {'PARALLEL (as expected)' if len(greenlet_ids) > 1 else 'UNEXPECTED - single greenlet!'}"
+    )
     print_greenlet_info("After: ")
     return times, container
 
@@ -240,7 +258,9 @@ def test_gevent_pool_parallel():
         elapsed = time.perf_counter() - start
         greenlet_ids.add(id(current))
         results.append((idx, resp.status_code, elapsed, id(current)))
-        print(f"    Request {idx+1}: {resp.status_code} in {elapsed:.3f}s, greenlet_id={id(current)}")
+        print(
+            f"    Request {idx + 1}: {resp.status_code} in {elapsed:.3f}s, greenlet_id={id(current)}"
+        )
         return elapsed
 
     with timer(f"{NUM_REQUESTS} requests via Pool(size={pool.size})", container):
@@ -279,13 +299,14 @@ async def test_asyncio_parallel():
                 body = await resp.read()
                 elapsed = time.perf_counter() - start
                 results.append((idx, resp.status, elapsed, len(body)))
-                print(f"    Request {idx+1}: {resp.status} in {elapsed:.3f}s, body_len={len(body)}")
+                print(
+                    f"    Request {idx + 1}: {resp.status} in {elapsed:.3f}s, body_len={len(body)}"
+                )
                 return elapsed
 
     async with aiohttp.ClientSession() as session:
         tasks = [make_request(session, i) for i in range(NUM_REQUESTS)]
         await asyncio.gather(*tasks)
-
 
     times = [r[2] for r in results]
     print(f"\n  Average per request: {statistics.mean(times):.3f}s")
@@ -313,17 +334,23 @@ def test_asyncio_parallel_sync_wrapper():
                     body = await resp.read()
                     elapsed = time.perf_counter() - start
                     results.append((idx, resp.status, elapsed, len(body)))
-                    print(f"    Request {idx+1}: {resp.status} in {elapsed:.3f}s, body_len={len(body)}")
+                    print(
+                        f"    Request {idx + 1}: {resp.status} in {elapsed:.3f}s, body_len={len(body)}"
+                    )
                     return elapsed
 
         async with aiohttp.ClientSession() as session:
             tasks = [make_request(session, i) for i in range(NUM_REQUESTS)]
             await asyncio.gather(*tasks)
 
-
-    with timer(f"{NUM_REQUESTS} requests via Asyncio(concurrency={CONCURRENT_REQUESTS})", container):
+    with timer(
+        f"{NUM_REQUESTS} requests via Asyncio(concurrency={CONCURRENT_REQUESTS})",
+        container,
+    ):
         asyncio.run(run_test())
-    print(f"  [{NUM_REQUESTS} parallel requests with asyncio] Elapsed: {container['elapsed']:.3f}s")
+    print(
+        f"  [{NUM_REQUESTS} parallel requests with asyncio] Elapsed: {container['elapsed']:.3f}s"
+    )
 
     times = [r[2] for r in results]
     print(f"\n  Average per request: {statistics.mean(times):.3f}s")

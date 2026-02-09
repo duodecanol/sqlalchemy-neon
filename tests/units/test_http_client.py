@@ -167,7 +167,9 @@ class TestAsyncContextManager:
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test async context manager opens and closes properly."""
-        async with AsyncNeonHTTPClient("postgresql://user:pass@host.neon.tech/db") as client:
+        async with AsyncNeonHTTPClient(
+            "postgresql://user:pass@host.neon.tech/db"
+        ) as client:
             assert client._http_client is None  # Not created until first request
 
     @pytest.mark.asyncio

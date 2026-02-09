@@ -125,7 +125,9 @@ class NeonConnectionError(NeonError, OperationalError):
 class NeonHTTPError(NeonError, OperationalError):
     """Exception raised for HTTP-level errors when communicating with Neon."""
 
-    def __init__(self, message: str, status_code: int, response_body: str | None = None):
+    def __init__(
+        self, message: str, status_code: int, response_body: str | None = None
+    ):
         self.status_code = status_code
         self.response_body = response_body
         super().__init__(f"HTTP {status_code}: {message}")

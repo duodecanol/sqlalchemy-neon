@@ -6,12 +6,22 @@ import os
 
 import pytest
 import logfire
+from pytest_asyncio import is_async_test
 
 
-logfire.configure(send_to_logfire=False, service_name="neon-serverless")
+
+logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbing=False)
 logfire.instrument_psycopg()
 logfire.instrument_aiohttp_client(capture_all=True)
 
+def pytest_collection_modifyitems(items):
+    # https://pytest-asyncio.readthedocs.io/en/v0.24.0/how-to-guides/run_session_tests_in_same_loop.html
+    print("pytest_collection_modifyitems called".center(80, "/"))
+    pytest_asyncio_tests = (item for item in items if is_async_test(item))
+    session_scope_marker = pytest.mark.asyncio(loop_scope="session")
+    for async_test in pytest_asyncio_tests:
+        print(async_test)
+        async_test.add_marker(session_scope_marker, append=False)
 
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:

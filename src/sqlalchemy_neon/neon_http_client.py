@@ -7,6 +7,7 @@ Uses aiohttp for fully async HTTP.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass
 from enum import Enum
@@ -60,7 +61,6 @@ class QueryOptions:
     array_mode: bool = False
     full_results: bool = True
     auth_token: str | None = None
-    timeout: float | None = None
 
 
 @dataclass
@@ -73,7 +73,6 @@ class TransactionOptions:
     array_mode: bool = False
     full_results: bool = True
     auth_token: str | None = None
-    timeout: float | None = None
 
     def __post_init__(self) -> None:
         """Validate transaction options."""
@@ -108,7 +107,7 @@ class AsyncNeonHTTPClient:
         | Callable[[], Awaitable[aiohttp.ClientSession]]
         | None = None,
         auth_token: str | None = None,
-        timeout: float | None = 30.0,
+        timeout: float | aiohttp.ClientTimeout| None = None,
     ) -> None:
         """Initialize the async Neon HTTP client.
 
@@ -124,11 +123,12 @@ class AsyncNeonHTTPClient:
         self._timeout = timeout
         self._url = self._parse_endpoint(connection_string)
         self._external_client: bool = http_client is not None
-        self._http_client: aiohttp.ClientSession | Callable[
-            [], Awaitable[aiohttp.ClientSession]
-        ] | None = http_client
+        self._http_client: (
+            aiohttp.ClientSession
+            | Callable[[], Awaitable[aiohttp.ClientSession]]
+            | None
+        ) = http_client
         self._type_converter = TypeConverter()
-
 
     def _parse_endpoint(self, connection_string: str) -> str:
         """Parse the HTTP endpoint URL from connection string.
@@ -210,30 +210,47 @@ class AsyncNeonHTTPClient:
         Returns:
             Active aiohttp.ClientSession instance.
         """
-        if self._external_client is True and callable(self._http_client):
-            self._http_client = await self._http_client()
+        if inspect.isawaitable(self._http_client):
+            self._http_client = await self._http_client
+
+        if callable(self._http_client):
+            maybe_client = self._http_client()
+            if inspect.isawaitable(maybe_client):
+                maybe_client = await maybe_client
+            self._http_client = maybe_client
 
         if self._http_client is None:
+            if isinstance(self._timeout, aiohttp.ClientTimeout):
+                timeout = self._timeout
+            elif isinstance(self._timeout, (int, float)):
+                timeout = aiohttp.ClientTimeout(total=self._timeout)
+            else:
+                timeout = None
+
             self._http_client = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self._timeout)
-                if self._timeout
-                else None,
+                timeout=timeout,
             )
-        assert isinstance(self._http_client, aiohttp.ClientSession)
+
+        if not isinstance(self._http_client, aiohttp.ClientSession):
+            raise NeonConfigurationError(
+                "http_client must be an aiohttp.ClientSession or a factory returning one."
+            )
+
+        if self._http_client.closed:
+            self._http_client = aiohttp.ClientSession()
+
         return self._http_client
 
     async def _request(
         self,
         body: dict[str, Any],
         headers: dict[str, str],
-        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Make an async HTTP request to the Neon API.
 
         Args:
             body: JSON request body.
             headers: HTTP headers.
-            timeout: Optional request timeout override.
 
         Returns:
             Parsed JSON response.
@@ -246,20 +263,11 @@ class AsyncNeonHTTPClient:
         client = await self._ensure_client()
         json_body = json.dumps(body)
 
-        request_timeout = timeout or self._timeout
         try:
-            # response = await client.post(
-            #     self._url,
-            #     content=json_body,
-            #     headers=headers,
-            #     timeout=request_timeout,
-            # )
-            # response_text = response.text
             async with client.post(
                 self._url,
                 data=json_body,
                 headers=headers,
-                timeout=request_timeout,
             ) as response:
                 response_text = await response.text()
 
@@ -288,18 +296,13 @@ class AsyncNeonHTTPClient:
                     status_code=response.status,
                     response_body=response_text,
                 ) from e
-        except aiohttp.ClientConnectionError as e:
-            raise NeonConnectionError(f"Connection error: {e}") from e
+
         except aiohttp.ConnectionTimeoutError as e:
             raise NeonConnectionError(f"Request timeout: {e}") from e
+        except aiohttp.ClientConnectionError as e:
+            raise NeonConnectionError(f"Connection error: {e}") from e
         except aiohttp.ClientError as e:
             raise NeonConnectionError(f"HTTP error: {e}") from e
-        # except httpx.ConnectError as e:
-        #     raise NeonConnectionError(f"Failed to connect to Neon: {e}") from e
-        # except httpx.TimeoutException as e:
-        #     raise NeonConnectionError(f"Request timeout: {e}") from e
-        # except httpx.HTTPError as e:
-        #     raise NeonConnectionError(f"HTTP error: {e}") from e
 
     def _parse_query_response(
         self,
@@ -375,7 +378,7 @@ class AsyncNeonHTTPClient:
             auth_token=options.auth_token,
         )
 
-        response = await self._request(body, headers, timeout=options.timeout)
+        response = await self._request(body, headers)
         result = self._parse_query_response(response, array_mode=options.array_mode)
 
         # Convert row values from text to Python types
@@ -429,7 +432,7 @@ class AsyncNeonHTTPClient:
             transaction_options=options,
         )
 
-        response = await self._request(body, headers, timeout=options.timeout)
+        response = await self._request(body, headers)
 
         # Transaction response contains "results" array
         if "results" in response:
@@ -462,9 +465,13 @@ class AsyncNeonHTTPClient:
 
     async def close(self) -> None:
         """Close the HTTP client (if owned by this instance)."""
-        if self._http_client:
-            await self._http_client.close()
-            self._http_client = None
+        if self._http_client and not self._external_client:
+            await self.force_close()
+    
+    async def force_close(self) -> None:
+        """Close the HTTP client unconditionally."""
+        await self._http_client.close()
+        self._http_client = None
 
     async def __aenter__(self) -> "AsyncNeonHTTPClient":
         """Async context manager entry."""

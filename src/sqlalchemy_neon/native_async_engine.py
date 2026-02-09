@@ -5,25 +5,34 @@ It compiles SQLAlchemy Core statements and executes them directly through
 ``AsyncNeonHTTPClient``.
 """
 
-from sqlalchemy_neon.neon_http_client import IsolationLevel
 from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
+import aiohttp
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine.result import IteratorResult, SimpleResultMetaData
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.sql import ClauseElement
 
-from .neon_http_client import AsyncNeonHTTPClient, QueryOptions, QueryResult, TransactionOptions
+from sqlalchemy_neon.neon_http_client import IsolationLevel
+
+from .neon_http_client import (
+    AsyncNeonHTTPClient,
+    QueryOptions,
+    QueryResult,
+    TransactionOptions,
+)
 from .types import TypeConverter
 
 _PYFORMAT_TOKEN = re.compile(r"%\(([^)]+)\)s")
 _TYPE_CONVERTER = TypeConverter()
 _PgDialect = postgresql.psycopg.PGDialect_psycopg
+_NO_DEFAULT = object()
+
 
 def _coerce_param_mapping(
     compiled: Any,
@@ -112,7 +121,7 @@ class NativeAsyncResult:
             entity_keys=entity_keys,
         )
 
-    def all(self) -> list[Any]:
+    def all(self) -> Sequence[sa.Row]:
         return self._result.all()
 
     def first(self) -> Any | None:
@@ -151,7 +160,9 @@ class NativeAsyncResult:
 
 def _normalize_raw_rows(raw: QueryResult) -> tuple[list[str], list[tuple[Any, ...]]]:
     keys = [field.get("name", "") for field in raw.fields]
-    oid_by_key = {field.get("name", ""): field.get("dataTypeID") for field in raw.fields}
+    oid_by_key = {
+        field.get("name", ""): field.get("dataTypeID") for field in raw.fields
+    }
     rows: list[tuple[Any, ...]] = []
 
     for row in raw.rows:
@@ -160,7 +171,11 @@ def _normalize_raw_rows(raw: QueryResult) -> tuple[list[str], list[tuple[Any, ..
             for key in keys:
                 value = row.get(key)
                 oid = oid_by_key.get(key)
-                if value is not None and isinstance(value, str) and isinstance(oid, int):
+                if (
+                    value is not None
+                    and isinstance(value, str)
+                    and isinstance(oid, int)
+                ):
                     try:
                         value = _TYPE_CONVERTER.pg_to_python(value, oid)
                     except Exception:
@@ -171,7 +186,11 @@ def _normalize_raw_rows(raw: QueryResult) -> tuple[list[str], list[tuple[Any, ..
             converted = []
             for value, field in zip(row, raw.fields):
                 oid = field.get("dataTypeID")
-                if value is not None and isinstance(value, str) and isinstance(oid, int):
+                if (
+                    value is not None
+                    and isinstance(value, str)
+                    and isinstance(oid, int)
+                ):
                     try:
                         value = _TYPE_CONVERTER.pg_to_python(value, oid)
                     except Exception:
@@ -296,14 +315,15 @@ def _build_sa_result(
 
     keys, rows = _normalize_raw_rows(raw)
 
-    entity_info = _extract_single_entity(statement if isinstance(statement, ClauseElement) else None)
+    entity_info = _extract_single_entity(
+        statement if isinstance(statement, ClauseElement) else None
+    )
     if entity_info is not None:
         entity_label, mapper = entity_info
         dialect = _PgDialect()
         row_maps = [dict(zip(keys, row)) for row in rows]
         entity_rows = [
-            (_row_to_entity(mapper, row_map, dialect=dialect),)
-            for row_map in row_maps
+            (_row_to_entity(mapper, row_map, dialect=dialect),) for row_map in row_maps
         ]
         return IteratorResult(SimpleResultMetaData([entity_label]), iter(entity_rows))
 
@@ -320,10 +340,16 @@ class NeonNativeAsyncEngine:
         self,
         connection_string: str,
         *,
-        http_client: Any | None = None,
+        http_client: aiohttp.ClientSession | Callable[[], Awaitable[aiohttp.ClientSession]] | None = None,
         auth_token: str | None = None,
-        timeout: float | None = 30.0,
+        timeout: float | None = None,
     ) -> None:
+        # http_client type check
+        if http_client is not None and not isinstance(http_client, aiohttp.ClientSession):
+            if not callable(http_client):
+                raise TypeError(
+                    "http_client must be an aiohttp.ClientSession or a callable returning one"
+                )
         self._client = AsyncNeonHTTPClient(
             connection_string,
             http_client=http_client,
@@ -351,7 +377,9 @@ class NeonNativeAsyncEngine:
         keys, rows = _normalize_raw_rows(raw)
         row_maps = [dict(zip(keys, row)) for row in rows]
         dialect = _PgDialect()
-        entities = [_row_to_entity(mapper, row_map, dialect=dialect) for row_map in row_maps]
+        entities = [
+            _row_to_entity(mapper, row_map, dialect=dialect) for row_map in row_maps
+        ]
 
         if isinstance(statement, ClauseElement):
             await self._hydrate_loader_options(
@@ -377,50 +405,151 @@ class NeonNativeAsyncEngine:
         options: TransactionOptions | None = None,
     ) -> list[NativeAsyncResult]:
         queries = [compile_sql(statement, params) for statement, params in statements]
-    
-        options = options if options is not None else TransactionOptions(
-            read_only=True,
-            isolation_level=IsolationLevel.SERIALIZABLE,
-            deferrable=True,
+
+        options = (
+            options
+            if options is not None
+            else TransactionOptions(
+                read_only=True,
+                isolation_level=IsolationLevel.SERIALIZABLE,
+                deferrable=True,
+            )
         )
         raw_results = await self._client.transaction(queries, options=options)
         return [
             NativeAsyncResult(item, statement=statement)
             for (statement, _), item in zip(statements, raw_results)
         ]
-    
+
     async def add(self, instance: Any) -> None:
         """Add an instance to the database."""
+        await self.add_all([instance])
+
+    async def add_all(self, instances: Sequence[Any]) -> None:
+        """Add multiple instances in one transaction."""
+        if not instances:
+            return
+
+        statements: list[
+            tuple[str | ClauseElement, Mapping[str, Any] | Sequence[Any] | None]
+        ] = []
+        tables: list[Any] = []
+        for instance in instances:
+            insert_stmt, params, table = self._build_insert_statement(instance)
+            statements.append((insert_stmt, params))
+            tables.append(table)
+
+        results = await self.transaction(
+            statements,
+            options=TransactionOptions(read_only=False),
+        )
+
+        for instance, table, result in zip(instances, tables, results):
+            self._assign_primary_keys(instance, table, result)
+
+    async def delete(self, instance: Any) -> None:
+        """Delete a persisted instance."""
+        await self.delete_all([instance])
+
+    async def delete_all(self, instances: Sequence[Any]) -> None:
+        """Delete multiple persisted instances in one transaction."""
+        if not instances:
+            return
+
+        statements: list[
+            tuple[str | ClauseElement, Mapping[str, Any] | Sequence[Any] | None]
+        ] = []
+        for instance in instances:
+            mapper = sa_inspect(instance).mapper
+            table = mapper.local_table
+            pk_cols = list(table.primary_key)
+            if not pk_cols:
+                raise ValueError("Cannot delete instance without primary key columns")
+
+            params: dict[str, Any] = {}
+            criteria = []
+            for pk_col in pk_cols:
+                value = getattr(instance, pk_col.key, None)
+                if value is None:
+                    raise ValueError(
+                        f"Cannot delete instance with unset primary key '{pk_col.key}'"
+                    )
+                bind_name = f"pk_{pk_col.key}"
+                criteria.append(pk_col == sa.bindparam(bind_name))
+                params[bind_name] = value
+
+            delete_stmt = sa.delete(table).where(sa.and_(*criteria))
+            statements.append((delete_stmt, params))
+
+        await self.transaction(
+            statements,
+            options=TransactionOptions(read_only=False),
+        )
+
+    def _build_insert_statement(
+        self, instance: Any
+    ) -> tuple[ClauseElement, dict[str, Any], Any]:
         mapper = sa_inspect(instance).mapper
         table = mapper.local_table
-        columns = []
-        values = []
+        insert_values: dict[str, Any] = {}
+        params: dict[str, Any] = {}
+
         for column in table.columns:
             if column.primary_key and column.autoincrement:
                 continue
-            columns.append(column)
-            values.append(getattr(instance, column.key))
 
-        insert_stmt = sa.insert(table).values(
-            {col.key: sa.bindparam(col.key) for col in columns}
-        ).returning(table)
+            value = getattr(instance, column.key, None)
 
-        params = {col.key: val for col, val in zip(columns, values)}
-        result = await self.execute(insert_stmt, params)
-        pk_values = result.first()
-        if pk_values is not None:
-            for pk_col, pk_value in zip(table.primary_key, pk_values):
-                setattr(instance, pk_col.key, pk_value)
+            # If value is unset, prefer Python defaults, then server defaults.
+            if value is None:
+                resolved_default = self._resolve_python_default(column.default)
+                if resolved_default is not _NO_DEFAULT:
+                    value = resolved_default
+                    setattr(instance, column.key, value)
+                elif column.server_default is not None:
+                    # Omit column so the database applies its server-side default.
+                    continue
 
-    async def dispose(self) -> None:
+            if value is None and column.default is not None:
+                default_arg = getattr(column.default, "arg", None)
+                if getattr(column.default, "is_clause_element", False):
+                    insert_values[column.key] = default_arg
+                    continue
 
-        await self._client.close()
+            insert_values[column.key] = sa.bindparam(column.key)
+            params[column.key] = value
 
-    async def __aenter__(self) -> "NeonNativeAsyncEngine":
-        return self
+        insert_stmt = sa.insert(table).values(insert_values).returning(table)
+        return insert_stmt, params, table
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        await self.dispose()
+    def _resolve_python_default(self, default: Any) -> Any:
+        if default is None:
+            return _NO_DEFAULT
+
+        if getattr(default, "is_scalar", False):
+            return default.arg
+
+        if getattr(default, "is_callable", False):
+            fn = default.arg
+            try:
+                return fn(None)
+            except TypeError:
+                return fn()
+
+        return _NO_DEFAULT
+
+    def _assign_primary_keys(
+        self, instance: Any, table: Any, result: NativeAsyncResult
+    ) -> None:
+        row = result.mappings().first()
+        if row is None:
+            return
+
+        for pk_col in table.primary_key:
+            if pk_col.key in row:
+                setattr(instance, pk_col.key, row[pk_col.key])
+            elif pk_col.name in row:
+                setattr(instance, pk_col.key, row[pk_col.name])
 
     def _extract_load_plans(self, statement: ClauseElement) -> list[dict[str, Any]]:
         plans: list[dict[str, Any]] = []
@@ -432,7 +561,9 @@ class NeonNativeAsyncEngine:
             if path is None:
                 continue
 
-            relationships = [token for token in list(path) if hasattr(token, "direction")]
+            relationships = [
+                token for token in list(path) if hasattr(token, "direction")
+            ]
             if not relationships:
                 continue
 
@@ -523,7 +654,9 @@ class NeonNativeAsyncEngine:
         dialect = _PgDialect()
 
         by_parent: dict[Any, list[Any]] = {pid: [] for pid in parent_ids}
-        per_parent_seen: dict[Any, set[tuple[Any, ...]]] = {pid: set() for pid in parent_ids}
+        per_parent_seen: dict[Any, set[tuple[Any, ...]]] = {
+            pid: set() for pid in parent_ids
+        }
 
         for row_map in row_maps:
             pid = row_map.get("__parent_identity")
@@ -557,9 +690,14 @@ class NeonNativeAsyncEngine:
             rel = plan["relationships"][idx]
             grouped.setdefault(rel, []).append((plan, idx))
 
-        async def hydrate_group(rel: Any, entries: list[tuple[dict[str, Any], int]]) -> None:
+        async def hydrate_group(
+            rel: Any, entries: list[tuple[dict[str, Any], int]]
+        ) -> None:
             strategy = self._select_strategy(
-                [entry_plan["strategies"][entry_idx] for entry_plan, entry_idx in entries]
+                [
+                    entry_plan["strategies"][entry_idx]
+                    for entry_plan, entry_idx in entries
+                ]
             )
             by_parent, loaded_children = await self._load_relationship_batch(
                 parents,
@@ -612,6 +750,18 @@ class NeonNativeAsyncEngine:
             [(plan, 0) for plan in plans],
             options=options,
         )
+
+    async def dispose(self) -> None:
+
+        await self._client.close()
+        if hasattr(self._client, "_external_client") and not self._client._http_client.closed:
+            await self._client.force_close()
+
+    async def __aenter__(self) -> "NeonNativeAsyncEngine":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.dispose()
 
 
 def create_neon_native_async_engine(

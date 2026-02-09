@@ -19,9 +19,10 @@ from psycopg.types.json import Jsonb
 # This forces PostgreSQL-style interval format
 try:
     import psycopg.types.datetime as psycopg_datetime
+
     psycopg_datetime._get_intervalstyle = lambda _: b"postgres"
 except (ImportError, AttributeError):
-    print('skldfjsdklfj')
+    print("skldfjsdklfj")
     pass
 
 from .errors import NeonTypeError
@@ -59,7 +60,7 @@ class TypeConverter:
             value = Jsonb(value)
         # Handle bytes -> hex format with \\x prefix
         if isinstance(value, bytes):
-            value =  "\\x" + value.hex()
+            value = "\\x" + value.hex()
 
         try:
             # Use psycopg's dumper for text format
@@ -74,7 +75,9 @@ class TypeConverter:
             elif isinstance(result, memoryview):
                 result = bytes(result).decode("utf-8")
         except Exception as e:
-            raise NeonTypeError(f"Failed to convert Python value to PostgreSQL: {e}") from e
+            raise NeonTypeError(
+                f"Failed to convert Python value to PostgreSQL: {e}"
+            ) from e
         return result
 
     def pg_to_python(self, value: str | None, oid: int) -> Any:
@@ -105,7 +108,9 @@ class TypeConverter:
             # This is safer than failing completely
             return value
 
-    def convert_params(self, params: list[Any] | tuple[Any, ...] | None) -> list[str | None]:
+    def convert_params(
+        self, params: list[Any] | tuple[Any, ...] | None
+    ) -> list[str | None]:
         """Convert a list of Python parameters to PostgreSQL text format.
 
         Args:
@@ -209,14 +214,16 @@ def build_cursor_description(fields: list[dict[str, Any]]) -> tuple[tuple, ...] 
         internal_size = field.get("dataTypeSize", -1)
 
         # PEP 249 requires 7-tuple
-        description.append((
-            name,           # name
-            type_code,      # type_code (OID)
-            None,           # display_size (not provided)
-            internal_size,  # internal_size
-            None,           # precision (not provided)
-            None,           # scale (not provided)
-            None,           # null_ok (not provided)
-        ))
+        description.append(
+            (
+                name,  # name
+                type_code,  # type_code (OID)
+                None,  # display_size (not provided)
+                internal_size,  # internal_size
+                None,  # precision (not provided)
+                None,  # scale (not provided)
+                None,  # null_ok (not provided)
+            )
+        )
 
     return tuple(description)

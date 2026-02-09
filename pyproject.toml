@@ -35,6 +35,8 @@ dev = [
     "pytest-asyncio>=0.21",
     "responses>=0.25",
     "asyncpg>=0.30.0",
+    "geventhttpclient>=2.3.7",
+    "httpx>=0.28.1",
 ]
 
 [build-system]
@@ -51,7 +53,8 @@ include = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 disable_test_id_escaping_and_forfeit_all_rights_to_community_support = true
 testpaths = ["tests"]
 markers = [
@@ -59,3 +62,8 @@ markers = [
     "testasync : Async Test",
 
 ]
+
+[tool.mypy]
+mypy_path = ["src", "."]
+explicit_package_bases = true
+files = ["src", "tests", "testsupport", "experiments"]

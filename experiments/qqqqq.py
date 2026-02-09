@@ -1,33 +1,31 @@
-import logfire
-import re
-import aiohttp
 import asyncio
 import contextlib
 import os
+import re
+import sys
+from pathlib import Path
 from typing import AsyncGenerator
 
 import aiohttp
 import logfire
 import rich
 import sqlalchemy as sa
-from models import Comment, Post, Tag, User
 from sqlalchemy import orm
 from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
     create_async_engine,
     create_async_pool_from_url,
-    async_sessionmaker,
 )
 
-from sqlalchemy_neon import (
-    PoolQuery,
-    create_neon_native_async_engine,
-    execute_pool_queries,
-)
+from sqlalchemy_neon import create_neon_native_async_engine
+from testsupport.models import Base, Comment, Post, Product, Tag, User, post_tags
 
 logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbing=False)
 logfire.instrument_aiohttp_client(capture_all=True)
 
-NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
+orm.Session
+NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL", "fffff")
 neon_url = NEON_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 neon_url_asyncpg = neon_url.rpartition("?")[0]
 neon_url_asyncpg = re.sub(
@@ -44,7 +42,7 @@ engine = create_async_engine(
     connect_args=dict(
         # sslmode="require",
         # channel_binding="require",
-    )
+    ),
 )
 logfire.instrument_sqlalchemy(engine)
 
@@ -57,7 +55,7 @@ ssm = async_sessionmaker(
 
 
 @contextlib.asynccontextmanager
-async def getsession() -> AsyncGenerator[sa.ext.asyncio.AsyncSession, None]:
+async def getsession() -> AsyncGenerator[AsyncSession, None]:
     async with ssm() as session:
         yield session
 
@@ -84,39 +82,6 @@ EAGER_OPTIONS = (
 )
 
 
-@logfire.instrument("add_all_inspect")
-async def add_all_inspect():
-    unique_prefix = "test-xxxxxx-yyy-"
-    users = [
-        User(
-            username=f"{unique_prefix}_user_{i}",
-            email=f"{unique_prefix}_user_{i}@example.com",
-            full_name=f"Advanced User {i}",
-        )
-        for i in range(55)
-    ]
-    tags = [Tag(name=f"{unique_prefix}_tag_{i}") for i in range(240)]
-    # posts = []
-    # for i in range(10):
-    #     author = users[i % 5]
-    #     post_tags = [tags[i % 5], tags[(i + 1) % 5]]
-    #     post = Post(
-    #         title=f"{unique_prefix}_post_{i}",
-    #         content=f"Complex content for post {i}",
-    #         author=author,
-    #         published=True,
-    #         tags=post_tags,
-    #     )
-    #     posts.append(post)
-
-    to_add = users + tags
-    async with getsession() as session:
-        await session.add_all_cheat(to_add)
-
-        # await session.bulk_save_objects(users)
-        await session.flush()
-
-
 @logfire.instrument("fetchtest_concurrent_dbsession")
 async def fetchtest_concurrent_dbsession():
     """
@@ -128,7 +93,7 @@ async def fetchtest_concurrent_dbsession():
     """
     post_ids = [1, 2, 3, 4, 5]
 
-    async def run_one(post_id: int) -> None:
+    async def run_one(post_id: int) -> Post:
         async with getsession() as session:
             stmt = sa.select(Post).where(Post.id == post_id).options(*EAGER_OPTIONS)
             result = await session.execute(stmt)
@@ -148,7 +113,6 @@ async def fetchtest_concurrent_dbsession():
             futures.append(future)
     results = [future.result() for future in futures]
     rich.print(results)
-
 
 
 @logfire.instrument("fetchtest_native_async_engine")

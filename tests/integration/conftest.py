@@ -5,14 +5,17 @@ import pytest_asyncio
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
+    async_sessionmaker,
     AsyncEngine,
     AsyncSession,
 )
 
+from typing import AsyncGenerator
+
 import aiohttp
 from sqlalchemy_neon import create_neon_native_async_engine, NeonNativeAsyncEngine
 
-from tests.integration.models import User, Base
+from testsupport.models import User, Base
 
 import logfire
 
@@ -40,20 +43,27 @@ def object_propagator(require_neon):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def neondb(require_neon, object_propagator) -> NeonNativeAsyncEngine:
-    """Create an async engine connected to Neon.
-    """
-    async def client_session_factory() -> aiohttp.ClientSession:
-        return aiohttp.ClientSession()
+async def neondb(
+    require_neon, object_propagator
+) -> AsyncGenerator[NeonNativeAsyncEngine, None]:
+    """Create an async engine connected to Neon."""
+
+    async def client_factory():
+        return aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15),
+        )
+
     engine = create_neon_native_async_engine(
         require_neon,
-        http_client=client_session_factory,
+        # http_client=aiohttp.ClientSession(
+        #     timeout=aiohttp.ClientTimeout(total=15),
+        # ),
+        http_client=client_factory,
     )
 
     yield engine
 
     await engine.dispose()
-
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -67,9 +77,7 @@ async def asyncpg_engine(require_neon, object_propagator):
     neon_url = require_neon.replace("postgresql://", "postgresql+asyncpg://")
     neon_url = neon_url.replace(".aws.neon.tech", "-pooler.aws.neon.tech")
     neon_url = neon_url.rpartition("?")[0]
-    neon_url = re.sub(
-        r"(\.[\w-]+\.aws\.neon\.tech)", "-pooler\\1", neon_url
-    )
+    neon_url = re.sub(r"(\.[\w-]+\.aws\.neon\.tech)", "-pooler\\1", neon_url)
     engine = create_async_engine(
         neon_url,
         echo=False,
@@ -86,14 +94,16 @@ async def asyncpg_engine(require_neon, object_propagator):
 
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def asyncpg_session(asyncpg_engine: AsyncEngine) -> AsyncSession:
+async def asyncpg_session(
+    asyncpg_engine: AsyncEngine,
+) -> AsyncGenerator[AsyncSession, None]:
     """Create a new async session for each test.
 
     Uses SQLAlchemy's AsyncSession which internally uses greenlet-based
     context switching to bridge the async interface with the synchronous
     HTTP client.
     """
-    sessionmaker = sa.async_sessionmaker(
+    sessionmaker = async_sessionmaker(
         asyncpg_engine,
         class_=AsyncSession,
         expire_on_commit=False,
