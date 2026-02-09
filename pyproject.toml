@@ -1,0 +1,69 @@
+[project]
+name = "sqlalchemy-neon"
+version = "0.1.0"
+description = "SQLAlchemy dialect for Neon serverless PostgreSQL over HTTP"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "you@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+]
+keywords = ["sqlalchemy", "neon", "postgresql", "serverless", "http", "async"]
+
+dependencies = [
+    "sqlalchemy>=2.0",
+    "httpx[http2]>=0.28",
+    "httpx-aiohttp>=0.0.6",
+    "aiohttp>=3.11",
+    "psycopg[binary]>=3.2.5",
+    "rich>=14.3.2",
+]
+
+[dependency-groups]
+dev = [
+    "logfire[aiohttp-client,httpx,psycopg]>=4.22.0",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "responses>=0.25",
+    "sqlalchemy[asyncpg]>=2.0.46",
+]
+
+[project.entry-points."sqlalchemy.dialects"]
+"postgresql.neonhttp" = "sqlalchemy_neon.dialect:NeonHTTPDialect"
+"postgresql.neonhttp_async" = "sqlalchemy_neon.dialect:NeonHTTPDialect_async"
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sqlalchemy_neon"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+disable_test_id_escaping_and_forfeit_all_rights_to_community_support = true
+testpaths = ["tests"]
+markers = [
+    "synctest  : Sync Integration Test",
+    "testasync : Async Test",
+
+]
+
