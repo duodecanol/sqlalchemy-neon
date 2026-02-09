@@ -27,18 +27,7 @@ from uuid import UUID
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy import (
-    func,
-    select,
-    and_,
-    or_,
-    desc,
-    asc,
-)
-from sqlalchemy.orm import (
-    selectinload,
-)
-from sqlalchemy_neon import NeonAsyncSession
+from sqlalchemy_neon import NeonNativeAsyncEngine
 from tests.integration.models import User, Post, Comment, Tag, Product
 
 
@@ -61,21 +50,19 @@ class TestAsyncBasicCRUD:
     """Test basic CRUD operations with async engine."""
 
     async def test_insert_single_user(
-        self, async_session: NeonAsyncSession, sample_users: list[User]
+        self, neondb: NeonNativeAsyncEngine, sample_users: list[User]
     ):
         """Test inserting a single user."""
         user = sample_users[0]
         user.username = get_unique_name("alice")
-        async_session.add(user)
-        await async_session.commit()
+        await neondb.add(user)
 
         assert user.id is not None
         assert user.uuid is not None
         assert "alice" in user.username
 
         q = sa.delete(User).where(User.id == user.id)
-        await async_session.execute(q)
-        await async_session.commit()
+        await neondb.execute(q)
 
     async def test_insert_multiple_users(
         self, async_session: NeonAsyncSession, unique_users: list[User]

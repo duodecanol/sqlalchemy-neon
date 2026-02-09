@@ -138,7 +138,7 @@ class Comment(Base):
     author: Mapped["User"] = relationship(back_populates="comments")
 
     def __repr__(self) -> str:
-        return f"<Comment(id={self.id}, post_id={self.post_id}, author_id={self.author_id})>"
+        return f"<Comment(id={self.id}, post_id={self.post_id}, author_id={self.author_id}, author='{self.author}')>"
 
 
 class Tag(Base):

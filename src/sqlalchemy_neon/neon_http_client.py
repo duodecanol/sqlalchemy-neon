@@ -1,7 +1,7 @@
 """
 Async HTTP client for Neon serverless PostgreSQL API.
 
-Uses httpx with aiohttp transport for fully async HTTP.
+Uses aiohttp for fully async HTTP.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ class AsyncNeonHTTPClient:
     This client communicates with Neon's HTTP SQL endpoint to execute
     queries without maintaining a persistent TCP connection.
 
-    Uses httpx with aiohttp transport for fully async HTTP.
+    Uses aiohttp for fully async HTTP.
 
     Example:
         async with AsyncNeonHTTPClient("postgresql://user:pass@host.neon.tech/db") as client:
@@ -104,7 +104,9 @@ class AsyncNeonHTTPClient:
         self,
         connection_string: str,
         *,
-        http_client: aiohttp.ClientSession | Callable[[], Awaitable[aiohttp.ClientSession]] | None = None,
+        http_client: aiohttp.ClientSession
+        | Callable[[], Awaitable[aiohttp.ClientSession]]
+        | None = None,
         auth_token: str | None = None,
         timeout: float | None = 30.0,
     ) -> None:
@@ -112,8 +114,8 @@ class AsyncNeonHTTPClient:
 
         Args:
             connection_string: PostgreSQL connection URI.
-            http_client: Optional external httpx.AsyncClient to use.
-                         If not provided, a new HttpxAiohttpClient is created.
+            http_client: Optional external aiohttp.ClientSession (or async factory).
+                         If not provided, a new ClientSession is created.
             auth_token: Optional JWT token for Row-Level Security.
             timeout: Default request timeout in seconds.
         """
@@ -122,7 +124,9 @@ class AsyncNeonHTTPClient:
         self._timeout = timeout
         self._url = self._parse_endpoint(connection_string)
         self._external_client: bool = http_client is not None
-        self._http_client: aiohttp.ClientSession = http_client
+        self._http_client: aiohttp.ClientSession | Callable[
+            [], Awaitable[aiohttp.ClientSession]
+        ] | None = http_client
         self._type_converter = TypeConverter()
 
 
@@ -204,11 +208,10 @@ class AsyncNeonHTTPClient:
         """Ensure an async HTTP client exists.
 
         Returns:
-            Active httpx.AsyncClient instance.
+            Active aiohttp.ClientSession instance.
         """
-        if self._external_client is True:
-            if asyncio.iscoroutinefunction(self._http_client):
-                self._http_client = await self._http_client()
+        if self._external_client is True and callable(self._http_client):
+            self._http_client = await self._http_client()
 
         if self._http_client is None:
             self._http_client = aiohttp.ClientSession(
@@ -216,6 +219,7 @@ class AsyncNeonHTTPClient:
                 if self._timeout
                 else None,
             )
+        assert isinstance(self._http_client, aiohttp.ClientSession)
         return self._http_client
 
     async def _request(
@@ -472,14 +476,16 @@ class AsyncNeonHTTPClient:
 
     def __del__(self) -> None:
         """Destructor."""
+        if not hasattr(self, "_http_client"):
+            return
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.close())
-            else:
-                loop.run_until_complete(self.close())
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            pass
+            return
+        if loop.is_running():
+            loop.create_task(self.close())
+        else:
+            loop.run_until_complete(self.close())
 
 
 # Keep legacy exports for compatibility during transition

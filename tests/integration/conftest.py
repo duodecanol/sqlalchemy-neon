@@ -1,5 +1,5 @@
 from datetime import date
-
+import re
 import pytest
 import pytest_asyncio
 import sqlalchemy as sa
@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
 
-from sqlalchemy_neon import NeonAsyncSession
+import aiohttp
+from sqlalchemy_neon import create_neon_native_async_engine, NeonNativeAsyncEngine
 
 from tests.integration.models import User, Base
 
@@ -39,22 +40,14 @@ def object_propagator(require_neon):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def async_engine(require_neon, object_propagator):
+async def neondb(require_neon, object_propagator) -> NeonNativeAsyncEngine:
     """Create an async engine connected to Neon.
-
-    Uses the neonhttp_async dialect which wraps the synchronous
-    geventhttpclient-based HTTP client with SQLAlchemy's greenlet
-    async adapter.
     """
-    neon_url = require_neon.replace("postgresql://", "postgresql+neonhttp_async://")
-    engine = create_async_engine(
-        neon_url,
-        isolation_level="AUTOCOMMIT",
-        echo=False,
-        expire_on_commit=False,
-        connect_args={
-            # "http_client": http_client,
-        },
+    async def client_session_factory() -> aiohttp.ClientSession:
+        return aiohttp.ClientSession()
+    engine = create_neon_native_async_engine(
+        require_neon,
+        http_client=client_session_factory,
     )
 
     yield engine
@@ -62,21 +55,6 @@ async def async_engine(require_neon, object_propagator):
     await engine.dispose()
 
 
-@pytest_asyncio.fixture(scope="function", loop_scope="session")
-async def async_session(async_engine: AsyncEngine) -> NeonAsyncSession:
-    """Create a new async session for each test.
-
-    Uses SQLAlchemy's AsyncSession which internally uses greenlet-based
-    context switching to bridge the async interface with the synchronous
-    HTTP client.
-    """
-    sessionmaker = sa.async_sessionmaker(
-        async_engine,
-        class_=NeonAsyncSession,
-        expire_on_commit=False,
-    )
-    async with sessionmaker() as sess:
-        yield sess
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def asyncpg_engine(require_neon, object_propagator):
@@ -88,6 +66,10 @@ async def asyncpg_engine(require_neon, object_propagator):
     """
     neon_url = require_neon.replace("postgresql://", "postgresql+asyncpg://")
     neon_url = neon_url.replace(".aws.neon.tech", "-pooler.aws.neon.tech")
+    neon_url = neon_url.rpartition("?")[0]
+    neon_url = re.sub(
+        r"(\.[\w-]+\.aws\.neon\.tech)", "-pooler\\1", neon_url
+    )
     engine = create_async_engine(
         neon_url,
         echo=False,
@@ -95,6 +77,7 @@ async def asyncpg_engine(require_neon, object_propagator):
         expire_on_commit=False,
         pool_pre_ping=True,
         pool_recycle=300,
+        pool_size=20,
     )
 
     yield engine
@@ -114,6 +97,8 @@ async def asyncpg_session(asyncpg_engine: AsyncEngine) -> AsyncSession:
         asyncpg_engine,
         class_=AsyncSession,
         expire_on_commit=False,
+        autoflush=False,
+        autocommit=False,
     )
     async with sessionmaker() as sess:
         yield sess

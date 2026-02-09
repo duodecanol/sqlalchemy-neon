@@ -1,7 +1,7 @@
 [project]
 name = "sqlalchemy-neon"
 version = "0.1.0"
-description = "SQLAlchemy dialect for Neon serverless PostgreSQL over HTTP"
+description = "Native async SQLAlchemy execution for Neon over HTTP"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -22,9 +22,7 @@ classifiers = [
 keywords = ["sqlalchemy", "neon", "postgresql", "serverless", "http", "async"]
 
 dependencies = [
-    "sqlalchemy>=2.0",
-    "httpx[http2]>=0.28",
-    "httpx-aiohttp>=0.0.6",
+    "sqlalchemy[asyncio]>=2.0",
     "aiohttp>=3.11",
     "psycopg[binary]>=3.2.5",
     "rich>=14.3.2",
@@ -32,17 +30,12 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "logfire[aiohttp-client,httpx,psycopg]>=4.22.0",
+    "logfire[aiohttp-client,psycopg,asyncpg,sqlalchemy]>=4.22.0",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "responses>=0.25",
-    "sqlalchemy[asyncpg]>=2.0.46",
+    "asyncpg>=0.30.0",
 ]
-
-[project.entry-points."sqlalchemy.dialects"]
-"postgresql.neonhttp" = "sqlalchemy_neon.dialect:NeonHTTPDialect"
-"postgresql.neonhttp_async" = "sqlalchemy_neon.dialect:NeonHTTPDialect_async"
-
 
 [build-system]
 requires = ["hatchling"]
@@ -66,4 +59,3 @@ markers = [
     "testasync : Async Test",
 
 ]
-

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import aiohttp
 import pytest
 import pytest_asyncio
 
@@ -95,8 +96,11 @@ class TestAsyncNeonHTTPClient:
         assert client1._external_client is False
 
         # With external client (mock)
-        import httpx
-        mock_client = httpx.AsyncClient()
+        class MockClient:
+            async def close(self):
+                return None
+
+        mock_client = MockClient()
         client2 = AsyncNeonHTTPClient(
             "postgresql://user:pass@host.neon.tech/db",
             http_client=mock_client,
@@ -169,8 +173,7 @@ class TestAsyncContextManager:
     @pytest.mark.asyncio
     async def test_close_external_client_not_closed(self):
         """Test that external client is not closed by client."""
-        import httpx
-        mock_client = httpx.AsyncClient()
+        mock_client = aiohttp.ClientSession()
 
         client = AsyncNeonHTTPClient(
             "postgresql://user:pass@host.neon.tech/db",
@@ -178,5 +181,5 @@ class TestAsyncContextManager:
         )
         await client.close()
         # External client should still be usable (not closed)
-        assert mock_client.is_closed is False
-        await mock_client.aclose()
+        assert mock_client.closed is False
+        await mock_client.close()

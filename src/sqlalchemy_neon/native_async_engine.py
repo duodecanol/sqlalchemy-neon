@@ -5,6 +5,7 @@ It compiles SQLAlchemy Core statements and executes them directly through
 ``AsyncNeonHTTPClient``.
 """
 
+from sqlalchemy_neon.neon_http_client import IsolationLevel
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +18,7 @@ from sqlalchemy.engine.result import IteratorResult, SimpleResultMetaData
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.sql import ClauseElement
 
-from .neon_http_client import AsyncNeonHTTPClient, QueryOptions, QueryResult
+from .neon_http_client import AsyncNeonHTTPClient, QueryOptions, QueryResult, TransactionOptions
 from .types import TypeConverter
 
 _PYFORMAT_TOKEN = re.compile(r"%\(([^)]+)\)s")
@@ -372,13 +373,44 @@ class NeonNativeAsyncEngine:
         statements: Sequence[
             tuple[str | ClauseElement, Mapping[str, Any] | Sequence[Any] | None]
         ],
+        *,
+        options: TransactionOptions | None = None,
     ) -> list[NativeAsyncResult]:
         queries = [compile_sql(statement, params) for statement, params in statements]
-        raw_results = await self._client.transaction(queries)
+    
+        options = options if options is not None else TransactionOptions(
+            read_only=True,
+            isolation_level=IsolationLevel.SERIALIZABLE,
+            deferrable=True,
+        )
+        raw_results = await self._client.transaction(queries, options=options)
         return [
             NativeAsyncResult(item, statement=statement)
             for (statement, _), item in zip(statements, raw_results)
         ]
+    
+    async def add(self, instance: Any) -> None:
+        """Add an instance to the database."""
+        mapper = sa_inspect(instance).mapper
+        table = mapper.local_table
+        columns = []
+        values = []
+        for column in table.columns:
+            if column.primary_key and column.autoincrement:
+                continue
+            columns.append(column)
+            values.append(getattr(instance, column.key))
+
+        insert_stmt = sa.insert(table).values(
+            {col.key: sa.bindparam(col.key) for col in columns}
+        ).returning(table)
+
+        params = {col.key: val for col, val in zip(columns, values)}
+        result = await self.execute(insert_stmt, params)
+        pk_values = result.first()
+        if pk_values is not None:
+            for pk_col, pk_value in zip(table.primary_key, pk_values):
+                setattr(instance, pk_col.key, pk_value)
 
     async def dispose(self) -> None:
 

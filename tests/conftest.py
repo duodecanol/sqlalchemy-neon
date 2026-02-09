@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-from typing import Generator
 
 import pytest
 import logfire
 
 
-logfire.configure(send_to_logfire=True, service_name="neon-serverless")
-logfire.instrument_httpx(capture_all=True)
+logfire.configure(send_to_logfire=False, service_name="neon-serverless")
 logfire.instrument_psycopg()
 logfire.instrument_aiohttp_client(capture_all=True)
 
