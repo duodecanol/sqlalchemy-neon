@@ -85,12 +85,14 @@ async def seeded_data(neondb: NeonNativeAsyncEngine, unique_prefix: str):
             "tag_ids": [t.id for t in tags],
         }
     finally:
-        await neondb.execute(
-            sa.delete(User).where(User.username.like(f"{unique_prefix}_user_%"))
-        )
-        await neondb.execute(
-            sa.delete(Tag).where(Tag.name.like(f"{unique_prefix}_tag_%"))
-        )
+        # !!!!!!!!!!!!!!!!!!!!!!!! deactivated cleanup for debugging !!!!!!!!!!!!!!!!!!!!!!!!!
+        ...
+        # await neondb.execute(
+        #     sa.delete(User).where(User.username.like(f"{unique_prefix}_user_%"))
+        # )
+        # await neondb.execute(
+        #     sa.delete(Tag).where(Tag.name.like(f"{unique_prefix}_tag_%"))
+        # )
 
 
 @pytest.mark.asyncio(loop_scope="session")

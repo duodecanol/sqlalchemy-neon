@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    text,
     UUID as SQLAlchemyUUID,
 )
 from datetime import date, datetime, UTC
@@ -68,8 +69,8 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     uuid: Mapped[UUID] = mapped_column(
-        SQLAlchemyUUID(as_uuid=True), default=uuid4, unique=True
-    )
+        SQLAlchemyUUID(as_uuid=True), server_default=text("gen_random_uuid()"), unique=True
+    )  # For testing UUID column server default
     username: Mapped[str] = mapped_column(String(50), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[Optional[str]] = mapped_column(String(100))

@@ -143,12 +143,11 @@ async def fetchtest_native_async_engine():
 
 async def main():
     # await add_all_inspect()
-    with logfire.span("main_all_tests"):
-        await fetchtest_concurrent_dbsession()
-        await fetchtest_concurrent_dbsession()
-        # await fetchtest_concurrent_conns()
-        await fetchtest_native_async_engine()
-        await fetchtest_native_async_engine()
+    await fetchtest_concurrent_dbsession()
+    await fetchtest_concurrent_dbsession()
+    # await fetchtest_concurrent_conns()
+    await fetchtest_native_async_engine()
+    await fetchtest_native_async_engine()
 
     ########################################
     await engine.dispose()
