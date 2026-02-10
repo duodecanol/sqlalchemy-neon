@@ -58,6 +58,10 @@ postgresql://username:password@host:port/database?param=value
 
 - `auth_token`: JWT token for Row-Level Security
 - `timeout`: Request timeout in seconds (default: 30)
+- `transport`: `"http"` (default) or `"websocket"`
+- `websocket_pool_size`: Max pooled WS connections when `transport="websocket"`
+- `fetch_endpoint`: Override Neon HTTP endpoint URL (or provide resolver callable)
+- `fetch_function`: Inject custom async HTTP transport callable
 - `sslmode`: SSL mode (same as PostgreSQL)
 
 Example with parameters:
@@ -66,6 +70,13 @@ Example with parameters:
 engine = create_neon_native_async_engine(
     "postgresql://user:pass@host.neon.tech/db"
     "?auth_token=your_jwt_token&timeout=60"
+)
+
+# WebSocket transport + pooled connections
+ws_engine = create_neon_native_async_engine(
+    "postgresql://user:pass@host.neon.tech/db",
+    transport="websocket",
+    websocket_pool_size=10,
 )
 ```
 

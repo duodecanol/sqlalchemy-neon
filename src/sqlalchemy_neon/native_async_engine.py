@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 
 import aiohttp
 import sqlalchemy as sa
@@ -22,6 +22,7 @@ from sqlalchemy_neon.neon_http_client import IsolationLevel
 
 from .neon_http_client import (
     AsyncNeonHTTPClient,
+    AsyncNeonWebSocketPool,
     QueryOptions,
     QueryResult,
     TransactionOptions,
@@ -340,22 +341,53 @@ class NeonNativeAsyncEngine:
         self,
         connection_string: str,
         *,
-        http_client: aiohttp.ClientSession | Callable[[], Awaitable[aiohttp.ClientSession]] | None = None,
+        http_client: aiohttp.ClientSession
+        | Callable[[], Awaitable[aiohttp.ClientSession]]
+        | None = None,
         auth_token: str | None = None,
         timeout: float | None = None,
+        fetch_endpoint: str | Callable[[str, int, bool], str] | None = None,
+        fetch_function: (
+            Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
+        ) = None,
+        transport: Literal["http", "websocket"] = "http",
+        websocket_pool_size: int = 10,
+        ws_proxy: str | Callable[[str, int], str] | None = None,
+        use_secure_websocket: bool = True,
+        websocket_heartbeat: float | None = 30.0,
     ) -> None:
         # http_client type check
-        if http_client is not None and not isinstance(http_client, aiohttp.ClientSession):
+        if http_client is not None and not isinstance(
+            http_client, aiohttp.ClientSession
+        ):
             if not callable(http_client):
                 raise TypeError(
                     "http_client must be an aiohttp.ClientSession or a callable returning one"
                 )
-        self._client = AsyncNeonHTTPClient(
-            connection_string,
-            http_client=http_client,
-            auth_token=auth_token,
-            timeout=timeout,
-        )
+        if transport == "http":
+            self._client = AsyncNeonHTTPClient(
+                connection_string,
+                http_client=http_client,
+                auth_token=auth_token,
+                timeout=timeout,
+                fetch_endpoint=fetch_endpoint,
+                fetch_function=fetch_function,
+            )
+        elif transport == "websocket":
+            self._client = AsyncNeonWebSocketPool(
+                connection_string,
+                max_size=websocket_pool_size,
+                http_client=http_client,
+                auth_token=auth_token,
+                timeout=timeout,
+                ws_proxy=ws_proxy,
+                use_secure_websocket=use_secure_websocket,
+                heartbeat=websocket_heartbeat,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported transport '{transport}'. Expected 'http' or 'websocket'."
+            )
 
     async def execute(
         self,
@@ -445,7 +477,7 @@ class NeonNativeAsyncEngine:
         )
 
         for instance, table, result in zip(instances, tables, results):
-            self._assign_primary_keys(instance, table, result)
+            self._apply_returning_values(instance, table, result)
 
     async def delete(self, instance: Any) -> None:
         """Delete a persisted instance."""
@@ -538,18 +570,24 @@ class NeonNativeAsyncEngine:
 
         return _NO_DEFAULT
 
-    def _assign_primary_keys(
+    def _apply_returning_values(
         self, instance: Any, table: Any, result: NativeAsyncResult
     ) -> None:
         row = result.mappings().first()
         if row is None:
             return
 
-        for pk_col in table.primary_key:
-            if pk_col.key in row:
-                setattr(instance, pk_col.key, row[pk_col.key])
-            elif pk_col.name in row:
-                setattr(instance, pk_col.key, row[pk_col.name])
+        for col in table.columns:
+            if col.key in row:
+                setattr(instance, col.key, row[col.key])
+                continue
+            if col.name in row:
+                setattr(instance, col.key, row[col.name])
+                continue
+
+            prefixed_key = f"{table.name}_{col.name}"
+            if prefixed_key in row:
+                setattr(instance, col.key, row[prefixed_key])
 
     def _extract_load_plans(self, statement: ClauseElement) -> list[dict[str, Any]]:
         plans: list[dict[str, Any]] = []
@@ -752,9 +790,16 @@ class NeonNativeAsyncEngine:
         )
 
     async def dispose(self) -> None:
-
         await self._client.close()
-        if hasattr(self._client, "_external_client") and not self._client._http_client.closed:
+        external_client = getattr(self._client, "_external_client", False)
+        raw_http_client = getattr(self._client, "_http_client", None)
+        if (
+            external_client
+            and raw_http_client is not None
+            and hasattr(raw_http_client, "closed")
+            and not raw_http_client.closed
+            and hasattr(self._client, "force_close")
+        ):
             await self._client.force_close()
 
     async def __aenter__(self) -> "NeonNativeAsyncEngine":
@@ -764,17 +809,82 @@ class NeonNativeAsyncEngine:
         await self.dispose()
 
 
+def create_neon_http_engine(
+    connection_string: str,
+    *,
+    http_client: Any | None = None,
+    auth_token: str | None = None,
+    timeout: float | None = 30.0,
+    fetch_endpoint: str | Callable[[str, int, bool], str] | None = None,
+    fetch_function: (
+        Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
+    ) = None,
+) -> NeonNativeAsyncEngine:
+    """Create an async Neon engine using the HTTP transport."""
+    return NeonNativeAsyncEngine(
+        connection_string,
+        http_client=http_client,
+        auth_token=auth_token,
+        timeout=timeout,
+        fetch_endpoint=fetch_endpoint,
+        fetch_function=fetch_function,
+        transport="http",
+    )
+
+
+def create_neon_ws_engine(
+    connection_string: str,
+    *,
+    http_client: Any | None = None,
+    auth_token: str | None = None,
+    timeout: float | None = 30.0,
+    pool_size: int = 10,
+    ws_proxy: str | Callable[[str, int], str] | None = None,
+    use_secure_websocket: bool = True,
+    heartbeat: float | None = 30.0,
+) -> NeonNativeAsyncEngine:
+    """Create an async Neon engine using the WebSocket transport."""
+    return NeonNativeAsyncEngine(
+        connection_string,
+        http_client=http_client,
+        auth_token=auth_token,
+        timeout=timeout,
+        transport="websocket",
+        websocket_pool_size=pool_size,
+        ws_proxy=ws_proxy,
+        use_secure_websocket=use_secure_websocket,
+        websocket_heartbeat=heartbeat,
+    )
+
+
 def create_neon_native_async_engine(
     connection_string: str,
     *,
     http_client: Any | None = None,
     auth_token: str | None = None,
     timeout: float | None = 30.0,
+    fetch_endpoint: str | Callable[[str, int, bool], str] | None = None,
+    fetch_function: (
+        Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
+    ) = None,
+    transport: Literal["http", "websocket"] = "http",
+    websocket_pool_size: int = 10,
+    ws_proxy: str | Callable[[str, int], str] | None = None,
+    use_secure_websocket: bool = True,
+    websocket_heartbeat: float | None = 30.0,
 ) -> NeonNativeAsyncEngine:
-    """Create a fully async Neon engine that bypasses SQLAlchemy AsyncEngine."""
+    """Create an async Neon engine. Prefer ``create_neon_http_engine`` or
+    ``create_neon_ws_engine`` for clearer intent."""
     return NeonNativeAsyncEngine(
         connection_string,
         http_client=http_client,
         auth_token=auth_token,
         timeout=timeout,
+        fetch_endpoint=fetch_endpoint,
+        fetch_function=fetch_function,
+        transport=transport,
+        websocket_pool_size=websocket_pool_size,
+        ws_proxy=ws_proxy,
+        use_secure_websocket=use_secure_websocket,
+        websocket_heartbeat=websocket_heartbeat,
     )

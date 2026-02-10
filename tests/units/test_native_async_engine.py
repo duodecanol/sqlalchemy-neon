@@ -70,6 +70,56 @@ async def test_native_engine_execute_forwards_to_client(mock_connection_string: 
     assert fake.calls[0][1] == [1]
 
 
+def test_native_engine_rejects_unknown_transport(mock_connection_string: str):
+    with pytest.raises(ValueError, match="Unsupported transport"):
+        NeonNativeAsyncEngine(
+            mock_connection_string,
+            transport="grpc",  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_engine_websocket_transport_uses_pool(
+    mock_connection_string: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import sqlalchemy_neon.native_async_engine as native_async_engine_module
+
+    class FakeWebSocketPool:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+        async def query(self, sql, params, options=None):
+            return QueryResult(
+                rows=[{"v": 42}],
+                fields=[{"name": "v"}],
+                row_count=1,
+                command="SELECT",
+            )
+
+        async def transaction(self, queries, options=None):
+            return []
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        native_async_engine_module,
+        "AsyncNeonWebSocketPool",
+        FakeWebSocketPool,
+    )
+
+    engine = NeonNativeAsyncEngine(
+        mock_connection_string,
+        transport="websocket",
+        websocket_pool_size=7,
+        use_secure_websocket=False,
+    )
+    result = await engine.execute(sa.text("select :x as v"), {"x": 1})
+
+    assert result.scalar_one() == 42
+
+
 @pytest.mark.asyncio
 async def test_native_engine_transaction_forwards_compiled_statements(
     mock_connection_string: str,

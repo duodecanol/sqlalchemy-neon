@@ -109,7 +109,7 @@ class TypeConverter:
             return value
 
     def convert_params(
-        self, params: list[Any] | tuple[Any, ...] | None
+        self, params: Sequence[Any] | tuple[Any, ...] | None
     ) -> list[str | None]:
         """Convert a list of Python parameters to PostgreSQL text format.
 
@@ -126,8 +126,8 @@ class TypeConverter:
 
     def convert_row(
         self,
-        row: dict[str, Any] | list[Any],
-        fields: list[dict[str, Any]],
+        row: dict[str, Any] | Sequence[Any],
+        fields: Sequence[dict[str, Any]],
         array_mode: bool = False,
     ) -> tuple[Any, ...] | dict[str, Any]:
         """Convert a row from Neon response to Python types.

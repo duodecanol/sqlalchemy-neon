@@ -53,17 +53,16 @@ async def neondb(
             timeout=aiohttp.ClientTimeout(total=15),
         )
 
-    engine = create_neon_native_async_engine(
-        require_neon,
-        # http_client=aiohttp.ClientSession(
-        #     timeout=aiohttp.ClientTimeout(total=15),
-        # ),
-        http_client=client_factory,
-    )
+    try:
+        engine = create_neon_native_async_engine(
+            require_neon,
+            http_client=client_factory,
+        )
 
-    yield engine
-
-    await engine.dispose()
+        yield engine
+    
+    finally:
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -83,7 +82,7 @@ async def asyncpg_engine(require_neon, object_propagator):
         echo=False,
         future=True,
         expire_on_commit=False,
-        pool_pre_ping=True,
+        # pool_pre_ping=True,
         pool_recycle=300,
         pool_size=20,
     )

@@ -23,6 +23,7 @@ from testsupport.models import Base, Comment, Post, Product, Tag, User, post_tag
 
 logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbing=False)
 logfire.instrument_aiohttp_client(capture_all=True)
+logfire.instrument_psycopg("psycopg")
 
 orm.Session
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL", "fffff")
@@ -36,7 +37,7 @@ engine = create_async_engine(
     neon_url_asyncpg,
     echo=False,
     future=True,
-    pool_pre_ping=True,
+    # pool_pre_ping=True,
     pool_recycle=300,
     pool_size=20,
     connect_args=dict(
@@ -73,6 +74,8 @@ async def client_session_factory() -> aiohttp.ClientSession:
 nengine = create_neon_native_async_engine(
     NEON_DATABASE_URL,
     http_client=client_session_factory,
+    # transport="websocket",
+    # websocket_pool_size=3,
 )
 
 EAGER_OPTIONS = (
@@ -142,16 +145,17 @@ async def fetchtest_native_async_engine():
 
 
 async def main():
-    # await add_all_inspect()
-    await fetchtest_concurrent_dbsession()
-    await fetchtest_concurrent_dbsession()
-    # await fetchtest_concurrent_conns()
-    await fetchtest_native_async_engine()
-    await fetchtest_native_async_engine()
+    try:
+        await fetchtest_concurrent_dbsession()
+        await fetchtest_concurrent_dbsession()
+        
+        await fetchtest_native_async_engine()
+        await fetchtest_native_async_engine()
 
-    ########################################
-    await engine.dispose()
-    await nengine.dispose()
+        ########################################
+    finally:
+        await engine.dispose()
+        await nengine.dispose()
 
 
 if __name__ == "__main__":
