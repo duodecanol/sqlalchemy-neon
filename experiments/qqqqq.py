@@ -1,4 +1,6 @@
+import logfire
 import asyncio
+import uuid
 import contextlib
 import os
 import re
@@ -8,6 +10,10 @@ from typing import AsyncGenerator
 
 import aiohttp
 import logfire
+
+
+# logfire.install_auto_tracing("sqlalchemy_neon.pg_protocol", min_duration=0.02)
+
 import rich
 import sqlalchemy as sa
 from sqlalchemy import orm
@@ -15,9 +21,9 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
-    create_async_pool_from_url,
+    async_scoped_session,
 )
-
+from sqlalchemy.pool import NullPool, AsyncAdaptedQueuePool
 from sqlalchemy_neon import create_neon_native_async_engine
 from testsupport.models import Base, Comment, Post, Product, Tag, User, post_tags
 
@@ -25,33 +31,44 @@ logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbin
 logfire.instrument_aiohttp_client(capture_all=True)
 logfire.instrument_psycopg("psycopg")
 
-orm.Session
+
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL", "fffff")
-neon_url = NEON_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+# neon_url = NEON_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+neon_url = NEON_DATABASE_URL.replace("postgresql://", "postgresql+psycopg://")
 neon_url_asyncpg = neon_url.rpartition("?")[0]
 neon_url_asyncpg = re.sub(
     r"(\.[\w-]+\.aws\.neon\.tech)", "-pooler\\1", neon_url_asyncpg
 )
 print(neon_url_asyncpg)
+#########################################################
 engine = create_async_engine(
     neon_url_asyncpg,
-    echo=False,
-    future=True,
-    # pool_pre_ping=True,
+    echo=True,
+    pool_pre_ping=False,
     pool_recycle=300,
-    pool_size=20,
+    pool_size=50,
+    poolclass=AsyncAdaptedQueuePool,
     connect_args=dict(
+        ############### asyncpg specific options ###############
+        prepared_statement_name_func=lambda: f"__asyncpg_{uuid.uuid4()}__",
+        # statement_cache_size=0,
+        ssl=True,
+        direct_tls=True,
+        ############### psycopg specific options ###############
         # sslmode="require",
         # channel_binding="require",
     ),
 )
 logfire.instrument_sqlalchemy(engine)
 
-ssm = async_sessionmaker(
-    engine,
-    expire_on_commit=False,
-    autoflush=False,
-    autocommit=False,
+ssm = async_scoped_session(
+    async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        autoflush=False,
+        autocommit=False,
+    ),
+    asyncio.current_task,
 )
 
 
@@ -62,22 +79,16 @@ async def getsession() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def client_session_factory() -> aiohttp.ClientSession:
-    return aiohttp.ClientSession(
-        # conn_timeout=8.0,
-        # read_timeout=60.0,
-        # connector=aiohttp.TCPConnector(
-        #     limit=210,
-        # ),
-    )
+    return aiohttp.ClientSession()
 
 
 nengine = create_neon_native_async_engine(
     NEON_DATABASE_URL,
     http_client=client_session_factory,
     # transport="websocket",
-    # websocket_pool_size=3,
+    # websocket_pool_size=30,
 )
-
+#########################################################
 EAGER_OPTIONS = (
     orm.joinedload(Post.author),
     orm.subqueryload(Post.tags),
@@ -100,6 +111,8 @@ async def fetchtest_concurrent_dbsession():
         async with getsession() as session:
             stmt = sa.select(Post).where(Post.id == post_id).options(*EAGER_OPTIONS)
             result = await session.execute(stmt)
+            rich.print(f"######################## {engine.dialect = }")
+            rich.print(f"######################## {engine.pool = }")
             rich.print(f"######################## {engine.pool.status() = }")
             post = result.unique().scalar_one()
             rich.print(
@@ -148,7 +161,9 @@ async def main():
     try:
         await fetchtest_concurrent_dbsession()
         await fetchtest_concurrent_dbsession()
-        
+        await fetchtest_concurrent_dbsession()
+
+        await fetchtest_native_async_engine()
         await fetchtest_native_async_engine()
         await fetchtest_native_async_engine()
 

@@ -23,8 +23,8 @@ keywords = ["sqlalchemy", "neon", "postgresql", "serverless", "http", "async"]
 
 dependencies = [
     "sqlalchemy[asyncio]>=2.0",
-    "aiohttp>=3.11",
     "psycopg[binary]>=3.2.5",
+    "aiohttp>=3.11",
     "rich>=14.3.2",
 ]
 
@@ -37,6 +37,7 @@ dev = [
     "asyncpg>=0.30.0",
     "geventhttpclient>=2.3.7",
     "httpx>=0.28.1",
+    "aiosqlite>=0.22.1",
 ]
 
 [build-system]

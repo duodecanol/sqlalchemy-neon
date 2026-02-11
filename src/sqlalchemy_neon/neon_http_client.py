@@ -136,7 +136,9 @@ class AsyncNeonHTTPClient:
         if not parsed.username:
             raise NeonConfigurationError("Connection string must include a username.")
         if not parsed.path or parsed.path == "/":
-            raise NeonConfigurationError("Connection string must include a database name.")
+            raise NeonConfigurationError(
+                "Connection string must include a database name."
+            )
         return parsed
 
     def _default_fetch_endpoint(self, host: str, *, jwt_auth: bool = False) -> str:
@@ -214,7 +216,9 @@ class AsyncNeonHTTPClient:
 
         return self._http_client
 
-    async def _request(self, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    async def _request(
+        self, body: dict[str, Any], headers: dict[str, str]
+    ) -> dict[str, Any]:
         json_body = json.dumps(body)
         url = self._resolve_fetch_url(jwt_auth=("Authorization" in headers))
 
@@ -227,7 +231,9 @@ class AsyncNeonHTTPClient:
                 )
             else:
                 client = await self._ensure_client()
-                async with client.post(url, data=json_body, headers=headers) as response:
+                async with client.post(
+                    url, data=json_body, headers=headers
+                ) as response:
                     status_code = response.status
                     response_text = await response.text()
 
@@ -268,7 +274,9 @@ class AsyncNeonHTTPClient:
         array_mode: bool = False,
     ) -> QueryResult:
         if "error" in response or "message" in response:
-            error_msg = response.get("message") or response.get("error", "Unknown error")
+            error_msg = response.get("message") or response.get(
+                "error", "Unknown error"
+            )
             raise NeonQueryError(
                 message=error_msg,
                 code=response.get("code"),
@@ -282,8 +290,7 @@ class AsyncNeonHTTPClient:
 
         if rows and fields:
             rows = [
-                self._type_converter.convert_row(row, fields, is_array)
-                for row in rows
+                self._type_converter.convert_row(row, fields, is_array) for row in rows
             ]
 
         return QueryResult(
@@ -358,6 +365,8 @@ class AsyncNeonHTTPClient:
 
     async def force_close(self) -> None:
         if self._http_client is None:
+            return
+        if callable(self._http_client):
             return
         await self._http_client.close()
         self._http_client = None
@@ -457,9 +466,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
                 raise NeonConnectionError("WebSocket closed during receive")
             if msg.type is aiohttp.WSMsgType.ERROR:
                 raise NeonConnectionError("WebSocket error during receive")
-            raise NeonConnectionError(
-                f"Unexpected WebSocket message type: {msg.type}"
-            )
+            raise NeonConnectionError(f"Unexpected WebSocket message type: {msg.type}")
 
         self._protocol = PGProtocol(send_fn, recv_fn)
 
@@ -505,7 +512,9 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             for f in pg_result.fields
         ]
 
-        command = pg_result.command_tag.split(" ", 1)[0] if pg_result.command_tag else ""
+        command = (
+            pg_result.command_tag.split(" ", 1)[0] if pg_result.command_tag else ""
+        )
         tag_parts = pg_result.command_tag.split(" ")
         row_count = len(pg_result.rows)
         if len(tag_parts) >= 2:
@@ -657,7 +666,9 @@ class AsyncNeonWebSocketPool:
         self._heartbeat = heartbeat
 
         self._create_lock = asyncio.Lock()
-        self._available: asyncio.LifoQueue[AsyncNeonWebSocketClient] = asyncio.LifoQueue()
+        self._available: asyncio.LifoQueue[AsyncNeonWebSocketClient] = (
+            asyncio.LifoQueue()
+        )
         self._clients: set[AsyncNeonWebSocketClient] = set()
         self._leased: set[AsyncNeonWebSocketClient] = set()
         self._closed = False
