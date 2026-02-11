@@ -1,7 +1,7 @@
 import logfire
+logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbing=False)
 # logfire.install_auto_tracing("sqlalchemy_neon.pg_protocol", min_duration=0.02)
 logfire.install_auto_tracing("aiohttp.client", min_duration=0.02)
-logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbing=False)
 logfire.instrument_aiohttp_client(capture_all=True)
 logfire.instrument_psycopg("psycopg")
 
@@ -83,8 +83,8 @@ async def client_session_factory() -> aiohttp.ClientSession:
 nengine = create_neon_native_async_engine(
     NEON_DATABASE_URL,
     http_client=client_session_factory,
-    # transport="websocket",
-    # websocket_pool_size=1,
+    transport="websocket",
+    websocket_pool_size=20,
 )
 #########################################################
 EAGER_OPTIONS = (

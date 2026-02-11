@@ -433,9 +433,8 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         protocol = "wss" if self._use_secure_websocket else "ws"
         return f"{protocol}://{addr}"
 
-    async def _ensure_connection(self) -> PGProtocol:
-        if self._protocol is not None and self._ws is not None and not self._ws.closed:
-            return self._protocol
+    async def _establish_websocket_connection(self) -> PGProtocol:
+        import logfire
 
         await self._close_connection()
 
@@ -451,11 +450,14 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
 
         ws = self._ws
 
+        @logfire.instrument("neon_websocket_send")
         async def send_fn(data: bytes) -> None:
             await ws.send_bytes(data)
 
+        @logfire.instrument("neon_websocket_recv")
         async def recv_fn() -> bytes:
             msg = await ws.receive()
+            logfire.debug(f"{msg.type = } | {msg.data}")
             if msg.type is aiohttp.WSMsgType.BINARY:
                 return msg.data
             if msg.type in (
@@ -469,6 +471,14 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             raise NeonConnectionError(f"Unexpected WebSocket message type: {msg.type}")
 
         self._protocol = PGProtocol(send_fn, recv_fn)
+        return self._protocol
+
+    async def _ensure_connection(self) -> PGProtocol:
+        if self._protocol is not None and self._ws is not None and not self._ws.closed:
+            return self._protocol
+
+        await self._establish_websocket_connection()
+        assert self._protocol is not None
 
         user = self._parsed_connection.username or ""
         password = self._parsed_connection.password or ""
@@ -566,6 +576,27 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             clause.append("DEFERRABLE")
         return "BEGIN " + " ".join(clause)
 
+    async def _connect_and_pipeline_query(
+        self,
+        sql: str,
+        params: list[bytes | None],
+    ) -> PGQueryResult:
+        await self._establish_websocket_connection()
+        assert self._protocol is not None
+
+        user = self._parsed_connection.username or ""
+        password = self._parsed_connection.password or ""
+        database = (self._parsed_connection.path or "/neondb").lstrip("/")
+
+        try:
+            _, query_result = await self._protocol.startup_with_query(
+                user, password, database, sql, params
+            )
+            return query_result
+        except (NeonAuthenticationError, NeonConnectionError):
+            await self._close_connection()
+            raise
+
     async def query(
         self,
         sql: str,
@@ -574,19 +605,26 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
     ) -> QueryResult:
         options = options or QueryOptions()
         async with self._request_lock:
-            protocol = await self._ensure_connection()
             text_params = self._type_converter.convert_params(params)
-            byte_params: Sequence[bytes | None] = [
+            byte_params: list[bytes | None] = [
                 p.encode() if p is not None else None for p in text_params
             ]
-            try:
-                pg_result = await protocol.extended_query(sql, byte_params)
-                return self._pg_result_to_query_result(
-                    pg_result, array_mode=options.array_mode
-                )
-            except NeonConnectionError:
-                await self._close_connection()
-                raise
+
+            if self._protocol is not None and self._ws is not None and not self._ws.closed:
+                try:
+                    pg_result = await self._protocol.extended_query(sql, byte_params)
+                    return self._pg_result_to_query_result(
+                        pg_result, array_mode=options.array_mode
+                    )
+                except NeonConnectionError:
+                    # Fallthrough to reconnect
+                    pass
+
+            # Not connected or connection failed, use pipeline
+            pg_result = await self._connect_and_pipeline_query(sql, byte_params)
+            return self._pg_result_to_query_result(
+                pg_result, array_mode=options.array_mode
+            )
 
     async def transaction(
         self,
@@ -596,13 +634,27 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options = options or TransactionOptions()
 
         async with self._request_lock:
-            protocol = await self._ensure_connection()
+            # Ensure connection (pipeline first query if possible?)
+            # For transaction, we can pipeline the BEGIN statement.
+            
+            if self._protocol is None or self._ws is None or self._ws.closed:
+                 await self._connect_and_pipeline_query(self._begin_clause(options), [])
+            else:
+                 # Check if alive?
+                 try:
+                     await self._protocol.simple_query(self._begin_clause(options))
+                 except NeonConnectionError:
+                     # Reconnect and pipeline
+                     await self._connect_and_pipeline_query(self._begin_clause(options), [])
+
+            protocol = self._protocol
+            assert protocol is not None # Should be connected now
+
             results: Sequence[QueryResult] = []
             try:
-                await protocol.simple_query(self._begin_clause(options))
                 for sql, params in queries:
                     text_params = self._type_converter.convert_params(params)
-                    byte_params: Sequence[bytes | None] = [
+                    byte_params: list[bytes | None] = [
                         p.encode() if p is not None else None for p in text_params
                     ]
                     pg_result = await protocol.extended_query(sql, byte_params)

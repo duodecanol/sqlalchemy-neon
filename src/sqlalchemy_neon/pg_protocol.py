@@ -481,6 +481,91 @@ class PGProtocol:
             elif msg_type == NOTICE_RESPONSE_MSG:
                 self._notices.append(_parse_error_fields(payload))
 
+    async def startup_with_query(
+        self,
+        user: str,
+        password: str,
+        database: str,
+        sql: str,
+        params: list[bytes | None],
+        **extra_params: str,
+    ) -> tuple[dict[str, str], PGQueryResult]:
+        """Perform batched startup, authentication and initial query.
+
+        Optimistically sends Startup + CleartextPassword + Extended Query.
+
+        Returns:
+            A tuple of (server_params, query_result)
+        """
+        # 1. Build batched message
+        msg = bytearray()
+
+        # Startup
+        msg += _build_startup_message(user, database, **extra_params)
+
+        # Password (Cleartext) - opportunistic
+        msg += _build_password_message(password)
+
+        # Extended Query
+        msg += _build_parse_message("", sql, [0] * len(params))
+        msg += _build_bind_message("", "", params)
+        msg += _build_describe_message("P", "")
+        msg += _build_execute_message("", 0)
+        msg += _build_sync_message()
+
+        await self._send(bytes(msg))
+
+        # 2. Handle Startup/Auth responses
+        # We expect:
+        # - AuthRequest (Cleartext or OK)
+        # - ParameterStatus...
+        # - BackendKeyData...
+        # - ReadyForQuery (Signaling end of startup phase)
+
+        while True:
+            msg_type, payload = await self._reader.read_message()
+
+            if msg_type == AUTH_MSG:
+                (auth_type,) = struct.unpack_from("!I", payload)
+                if auth_type == AUTH_OK:
+                    pass
+                elif auth_type == AUTH_CLEARTEXT:
+                    # We already sent the password, so just ignore this request.
+                    # The server will read the next message in the buffer (PasswordMessage).
+                    pass
+                else:
+                    # If server asks for MD5 or SASL, our opportunistic pipeline failed.
+                    raise NeonAuthenticationError(
+                        f"Pipeline failed: Server requested auth type {auth_type}, but cleartext was sent."
+                    )
+
+            elif msg_type == PARAM_STATUS_MSG:
+                null1 = payload.index(0)
+                key = payload[:null1].decode()
+                null2 = payload.index(0, null1 + 1)
+                value = payload[null1 + 1 : null2].decode()
+                self._server_params[key] = value
+
+            elif msg_type == BACKEND_KEY_MSG:
+                self._backend_pid, self._backend_secret = struct.unpack("!II", payload)
+
+            elif msg_type == READY_MSG:
+                self._txn_status = payload[0]
+                break
+
+            elif msg_type == ERROR_RESPONSE_MSG:
+                ef = _parse_error_fields(payload)
+                raise NeonAuthenticationError(
+                    f"Startup/Auth failed in pipeline: {ef.get('message', 'unknown')}"
+                )
+            elif msg_type == NOTICE_RESPONSE_MSG:
+                self._notices.append(_parse_error_fields(payload))
+
+        # 3. Handle Query Response
+        query_result = await self._read_extended_query_result()
+
+        return self._server_params, query_result
+
     async def _handle_authentication(self, user: str, password: str) -> None:
         while True:
             msg_type, payload = await self._reader.read_message()
@@ -643,6 +728,9 @@ class PGProtocol:
         messages += _build_sync_message()
         await self._send(bytes(messages))
 
+        return await self._read_extended_query_result()
+
+    async def _read_extended_query_result(self) -> PGQueryResult:
         # Read responses
         fields: list[FieldDescription] = []
         rows: list[list[bytes | None]] = []
@@ -663,6 +751,11 @@ class PGProtocol:
                 rows.append(_parse_data_row(payload))
             elif msg_type == COMMAND_COMPLETE_MSG:
                 command_tag = payload[:-1].decode()
+                # For extended query, we keep reading until ReadyForQuery?
+                # Actually SYNC triggers ReadyForQuery.
+                # CommandComplete is distinct from ReadyForQuery.
+                # But in standard extended flow: Parse(C), Bind(C), Describe(RowDesc/NoData), Execute(DataRow... CommandC), Sync(Ready)
+                # So we continue loop.
             elif msg_type == ERROR_RESPONSE_MSG:
                 ef = _parse_error_fields(payload)
                 await self._read_until_ready()
