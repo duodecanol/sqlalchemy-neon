@@ -1,3 +1,4 @@
+import sqlalchemy as sa
 from sqlalchemy import (
     Boolean,
     Column,
@@ -33,6 +34,7 @@ __all__ = (
     "Comment",
     "Tag",
     "Product",
+    "ComplexData",
     "post_tags",
 )
 
@@ -174,3 +176,23 @@ class Product(Base):
 
     def __repr__(self) -> str:
         return f"<Product(id={self.id}, name='{self.name}', price={self.price})>"
+
+
+class ComplexData(Base):
+    """Model for testing large/complex JSON and JSONB payloads."""
+
+    __tablename__ = "complex_data"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    data_json: Mapped[Optional[dict]] = mapped_column(sa.JSON)
+    data_jsonb: Mapped[Optional[dict]] = mapped_column(JSONB)
+    metadata_jsonb: Mapped[Optional[dict]] = mapped_column(JSONB)
+    data_bytea: Mapped[Optional[bytes]] = mapped_column(sa.LargeBinary)
+    data_text: Mapped[Optional[str]] = mapped_column(sa.Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    def __repr__(self) -> str:
+        return f"<ComplexData(id={self.id}, name='{self.name}')>"
