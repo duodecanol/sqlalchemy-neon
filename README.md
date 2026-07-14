@@ -89,13 +89,27 @@ ws_engine = create_neon_native_async_engine(
 git clone https://github.com/yourusername/sqlalchemy-neon-driver.git
 cd sqlalchemy-neon-driver
 
-# Create virtual environment
-python -m venv .venv
+# Sync the runtime package and development toolchain, including Logfire.
+uv sync --group dev
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install development dependencies
-pip install -e ".[dev]"
+### Development Telemetry (Optional)
+
+Logfire is a development-only dependency. It is neither imported by the driver nor
+declared in the published wheel's runtime dependencies.
+
+Test telemetry is disabled by default. To export safe request-level spans while
+developing, explicitly provide both a Logfire write token and the opt-in flag:
+
+```bash
+ENABLE_TEST_TELEMETRY=1 LOGFIRE_TOKEN=<write-token> \
+  uv run --group dev pytest -o addopts="--logfire" tests/units -q
 ```
+
+This records standard client span metadata only. Request and response headers,
+bodies, PostgreSQL frames, SQL parameters, and query results are never captured
+or exported. Inspect a specific raw payload locally with a debugger; do not send
+it to telemetry.
 
 ### Running Tests
 
@@ -104,14 +118,14 @@ pip install -e ".[dev]"
 Run unit tests without requiring a live database:
 
 ```bash
-pytest tests/test_native_async_engine.py tests/test_types.py tests/test_http_client.py
+uv run --group dev pytest tests/units -q
 ```
 
 #### Run All Tests
 
 ```bash
 # Test suite (no database required)
-pytest tests/ -v
+uv run --group dev pytest tests/ -v
 ```
 
 ### Test Coverage

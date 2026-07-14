@@ -434,7 +434,6 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         return f"{protocol}://{addr}"
 
     async def _establish_websocket_connection(self) -> PGProtocol:
-        import logfire
 
         await self._close_connection()
 
@@ -450,14 +449,11 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
 
         ws = self._ws
 
-        @logfire.instrument("neon_websocket_send")
         async def send_fn(data: bytes) -> None:
             await ws.send_bytes(data)
 
-        @logfire.instrument("neon_websocket_recv")
         async def recv_fn() -> bytes:
             msg = await ws.receive()
-            logfire.debug(f"{msg.type = } | {msg.data}")
             if msg.type is aiohttp.WSMsgType.BINARY:
                 return msg.data
             if msg.type in (
