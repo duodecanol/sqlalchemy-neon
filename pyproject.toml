@@ -58,6 +58,7 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 disable_test_id_escaping_and_forfeit_all_rights_to_community_support = true
 testpaths = ["tests"]
+addopts = "--no-logfire"
 markers = [
     "synctest  : Sync Integration Test",
     "testasync : Async Test",

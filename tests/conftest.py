@@ -5,14 +5,25 @@ from __future__ import annotations
 import os
 
 import pytest
-import logfire
 from pytest_asyncio import is_async_test
 
 
+@pytest.fixture(scope="session", autouse=True)
+def configure_test_telemetry() -> None:
+    """Enable safe remote test telemetry only when explicitly requested."""
+    if os.environ.get("ENABLE_TEST_TELEMETRY") != "1":
+        return
+    if not os.environ.get("LOGFIRE_TOKEN"):
+        return
 
-logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbing=False)
-logfire.instrument_psycopg()
-logfire.instrument_aiohttp_client(capture_all=True)
+    import logfire
+
+    logfire.configure(
+        send_to_logfire="if-token-present",
+        service_name="neon-serverless",
+    )
+    logfire.instrument_psycopg()
+    logfire.instrument_aiohttp_client()
 
 def pytest_collection_modifyitems(items):
     # https://pytest-asyncio.readthedocs.io/en/v0.24.0/how-to-guides/run_session_tests_in_same_loop.html

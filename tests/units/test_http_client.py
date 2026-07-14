@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import aiohttp
 import pytest
 
@@ -281,6 +282,40 @@ async def test_fetch_function_injection_is_used():
     assert result.rows[0]["v"] == 1
     assert len(calls) == 1
 
+
+
+@pytest.mark.asyncio
+async def test_websocket_connection_does_not_require_logfire(monkeypatch):
+    class FakeWebSocket:
+        def __init__(self):
+            self.sent: list[bytes] = []
+
+        async def send_bytes(self, data: bytes) -> None:
+            self.sent.append(data)
+
+    class FakeClient:
+        async def ws_connect(self, *args, **kwargs):
+            return websocket
+
+    async def close_connection() -> None:
+        return None
+
+    async def ensure_client() -> FakeClient:
+        return fake_client
+
+    websocket = FakeWebSocket()
+    fake_client = FakeClient()
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db"
+    )
+    monkeypatch.setitem(sys.modules, "logfire", None)
+    monkeypatch.setattr(client, "_close_connection", close_connection)
+    monkeypatch.setattr(client, "_ensure_client", ensure_client)
+
+    protocol = await client._establish_websocket_connection()
+
+    await protocol._send(b"outbound-frame")
+    assert websocket.sent == [b"outbound-frame"]
 
 @pytest.mark.asyncio
 async def test_websocket_pool_reuses_and_limits_clients(monkeypatch):
