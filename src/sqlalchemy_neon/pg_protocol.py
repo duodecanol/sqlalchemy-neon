@@ -418,6 +418,10 @@ class _ScramSHA256:
 # ---------------------------------------------------------------------------
 
 
+class _PipelineAuthenticationRequired(NeonAuthenticationError):
+    """Signal that a fresh connection must negotiate authentication normally."""
+
+
 class PGProtocol:
     """PostgreSQL wire protocol v3.0 handler.
 
@@ -429,6 +433,8 @@ class PGProtocol:
         self,
         send_fn: Callable[[bytes], Awaitable[None]],
         recv_fn: Callable[[], Awaitable[bytes]],
+        *,
+        allow_insecure_password_auth: bool = True,
     ) -> None:
         self._send = send_fn
         self._reader = _BufferedReader(recv_fn)
@@ -437,6 +443,7 @@ class PGProtocol:
         self._backend_secret: int = 0
         self._txn_status: int = TXN_IDLE
         self._notices: list[dict[str, str]] = []
+        self._allow_insecure_password_auth = allow_insecure_password_auth
 
     @property
     def server_params(self) -> dict[str, str]:
@@ -507,6 +514,11 @@ class PGProtocol:
         Returns:
             A tuple of (server_params, query_result)
         """
+        if not self._allow_insecure_password_auth:
+            raise NeonAuthenticationError(
+                "Cleartext password authentication requires a secure transport."
+            )
+
         # 1. Build batched message
         msg = bytearray()
 
@@ -545,8 +557,8 @@ class PGProtocol:
                     pass
                 else:
                     # If server asks for MD5 or SASL, our opportunistic pipeline failed.
-                    raise NeonAuthenticationError(
-                        f"Pipeline failed: Server requested auth type {auth_type}, but cleartext was sent."
+                    raise _PipelineAuthenticationRequired(
+                        f"Pipeline requires authentication negotiation for auth type {auth_type}."
                     )
 
             elif msg_type == PARAM_STATUS_MSG:
@@ -597,9 +609,17 @@ class PGProtocol:
                 return
 
             if auth_type == AUTH_CLEARTEXT:
+                if not self._allow_insecure_password_auth:
+                    raise NeonAuthenticationError(
+                        "Cleartext password authentication requires a secure transport."
+                    )
                 await self._send(_build_password_message(password))
 
             elif auth_type == AUTH_MD5:
+                if not self._allow_insecure_password_auth:
+                    raise NeonAuthenticationError(
+                        "MD5 password authentication requires a secure transport or SCRAM-SHA-256."
+                    )
                 salt = payload[4:8]
                 inner = hashlib.md5(
                     password.encode() + user.encode()
