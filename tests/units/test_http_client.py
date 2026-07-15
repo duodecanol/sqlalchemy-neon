@@ -17,7 +17,7 @@ from sqlalchemy_neon.neon_http_client import (
     QueryResult,
     TransactionOptions,
 )
-from sqlalchemy_neon.errors import NeonConfigurationError
+from sqlalchemy_neon.errors import NeonConfigurationError, NeonTypeError
 
 
 class TestAsyncNeonHTTPClient:
@@ -328,6 +328,7 @@ async def test_websocket_pool_reuses_and_limits_clients(monkeypatch):
 
         def __init__(self, *args, **kwargs):
             FakeWSClient.created += 1
+            self.is_reusable = True
 
         async def query(self, sql, params=None, options=None):
             FakeWSClient.active += 1
@@ -369,6 +370,161 @@ async def test_websocket_pool_reuses_and_limits_clients(monkeypatch):
 
     assert FakeWSClient.created <= 2
     assert FakeWSClient.max_active <= 2
+
+
+@pytest.mark.asyncio
+async def test_websocket_query_cancellation_quarantines_client(monkeypatch):
+    class FakeWebSocket:
+        closed = False
+
+    class FakeProtocol:
+        is_reusable = True
+
+        async def extended_query(self, sql, params):
+            raise asyncio.CancelledError
+
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db"
+    )
+    client._ws = FakeWebSocket()
+    client._protocol = FakeProtocol()
+    force_close_calls = 0
+
+    async def force_close():
+        nonlocal force_close_calls
+        force_close_calls += 1
+
+    monkeypatch.setattr(client, "force_close", force_close)
+
+    with pytest.raises(asyncio.CancelledError):
+        await client.query("SELECT 1")
+
+    assert force_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_websocket_transaction_conversion_failure_quarantines_client(
+    monkeypatch,
+):
+    class FakeWebSocket:
+        closed = False
+
+    class FakeProtocol:
+        is_reusable = True
+
+        def __init__(self):
+            self.queries: list[str] = []
+
+        async def simple_query(self, sql):
+            self.queries.append(sql)
+            return []
+
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db"
+    )
+    protocol = FakeProtocol()
+    client._ws = FakeWebSocket()
+    client._protocol = protocol
+    force_close_calls = 0
+
+    def raise_type_error(params):
+        raise NeonTypeError("conversion failed")
+
+    async def force_close():
+        nonlocal force_close_calls
+        force_close_calls += 1
+
+    monkeypatch.setattr(client._type_converter, "convert_params", raise_type_error)
+    monkeypatch.setattr(client, "force_close", force_close)
+
+    with pytest.raises(NeonTypeError, match="conversion failed"):
+        await client.transaction([("SELECT $1", [object()])])
+
+    assert protocol.queries[0].startswith("BEGIN ")
+    assert protocol.queries[1] == "ROLLBACK"
+    assert force_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_websocket_pool_discards_unhealthy_client(monkeypatch):
+    import sqlalchemy_neon.neon_http_client as neon_http_client_module
+
+    class FakeWSClient:
+        created = 0
+
+        def __init__(self, *args, **kwargs):
+            FakeWSClient.created += 1
+            self.is_reusable = True
+            self.force_close_calls = 0
+
+        async def close(self):
+            return None
+
+        async def force_close(self):
+            self.force_close_calls += 1
+            self.is_reusable = False
+
+    monkeypatch.setattr(
+        neon_http_client_module,
+        "AsyncNeonWebSocketClient",
+        FakeWSClient,
+    )
+    pool = AsyncNeonWebSocketPool(
+        "postgresql://user:pass@host.neon.tech/db",
+        max_size=1,
+    )
+
+    client = await pool.acquire()
+    client.is_reusable = False
+    await pool.release(client)
+
+    assert client.force_close_calls == 1
+    assert client not in pool._clients
+    assert pool._available.empty()
+
+    replacement = await pool.acquire()
+    assert replacement is not client
+    assert FakeWSClient.created == 2
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_pool_discards_cancelled_borrower(monkeypatch):
+    import sqlalchemy_neon.neon_http_client as neon_http_client_module
+
+    class FakeWSClient:
+        def __init__(self, *args, **kwargs):
+            self.is_reusable = True
+            self.force_close_calls = 0
+
+        async def close(self):
+            return None
+
+        async def force_close(self):
+            self.force_close_calls += 1
+            self.is_reusable = False
+
+    monkeypatch.setattr(
+        neon_http_client_module,
+        "AsyncNeonWebSocketClient",
+        FakeWSClient,
+    )
+    pool = AsyncNeonWebSocketPool(
+        "postgresql://user:pass@host.neon.tech/db",
+        max_size=1,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        async with pool.connection() as client:
+            raise asyncio.CancelledError
+
+    assert client.force_close_calls == 1
+    assert client not in pool._clients
+    assert pool._available.empty()
+
+    replacement = await pool.acquire()
+    assert replacement is not client
+    await pool.close()
 
 
 def test_websocket_pool_validates_size():

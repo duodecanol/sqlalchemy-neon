@@ -38,6 +38,7 @@ dev = [
     "geventhttpclient>=2.3.7",
     "httpx>=0.28.1",
     "aiosqlite>=0.22.1",
+    "ruff>=0.15.21",
 ]
 
 [build-system]
