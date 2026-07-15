@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from testsupport.neon_test_safety import validate_destructive_test_database
+
 import pytest
 from pytest_asyncio import is_async_test
 
@@ -52,16 +54,20 @@ def mock_connection_string() -> str:
 
 @pytest.fixture(scope="session")
 def neon_connection_string() -> str | None:
-    """Provide real Neon connection string from environment.
-
-    Returns None if NEON_DATABASE_URL is not set.
-    """
-    return os.environ.get("NEON_DATABASE_URL")
+    """Provide the explicit test-only Neon connection string."""
+    return os.environ.get("NEON_TEST_DATABASE_URL")
 
 
 @pytest.fixture(scope="session")
-def require_neon(neon_connection_string: str | None):
-    """Skip test if Neon connection is not available."""
-    if neon_connection_string is None:
-        pytest.skip("NEON_DATABASE_URL environment variable not set")
+def require_neon(neon_connection_string: str | None) -> str:
+    """Skip live tests when no explicit test-only database is configured."""
+    if not neon_connection_string:
+        pytest.skip("NEON_TEST_DATABASE_URL environment variable not set")
     return neon_connection_string
+
+
+@pytest.fixture(scope="session")
+def require_destructive_neon(require_neon: str) -> str:
+    """Refuse schema DDL unless the test target is explicitly approved."""
+    validate_destructive_test_database(require_neon, os.environ)
+    return require_neon
