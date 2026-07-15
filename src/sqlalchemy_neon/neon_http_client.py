@@ -23,7 +23,11 @@ from .errors import (
     NeonQueryError,
     NeonTransactionError,
 )
-from .pg_protocol import PGProtocol, PGQueryResult
+from .pg_protocol import (
+    PGProtocol,
+    PGQueryResult,
+    _PipelineAuthenticationRequired,
+)
 from .types import TypeConverter
 
 if TYPE_CHECKING:
@@ -466,7 +470,11 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
                 raise NeonConnectionError("WebSocket error during receive")
             raise NeonConnectionError(f"Unexpected WebSocket message type: {msg.type}")
 
-        self._protocol = PGProtocol(send_fn, recv_fn)
+        self._protocol = PGProtocol(
+            send_fn,
+            recv_fn,
+            allow_insecure_password_auth=self._ws_url.startswith("wss://"),
+        )
         return self._protocol
 
     async def _ensure_connection(self) -> PGProtocol:
@@ -613,6 +621,21 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             await self._close_connection()
             raise
 
+    async def _connect_and_query(
+        self,
+        sql: str,
+        params: list[bytes | None],
+    ) -> PGQueryResult:
+        if not self._ws_url.startswith("wss://"):
+            protocol = await self._ensure_connection()
+            return await protocol.extended_query(sql, params)
+
+        try:
+            return await self._connect_and_pipeline_query(sql, params)
+        except _PipelineAuthenticationRequired:
+            protocol = await self._ensure_connection()
+            return await protocol.extended_query(sql, params)
+
     async def query(
         self,
         sql: str,
@@ -638,7 +661,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
                     except NeonConnectionError:
                         await self._quarantine_connection()
 
-                pg_result = await self._connect_and_pipeline_query(sql, byte_params)
+                pg_result = await self._connect_and_query(sql, byte_params)
                 return self._pg_result_to_query_result(
                     pg_result, array_mode=options.array_mode
                 )
@@ -662,13 +685,9 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
                         await protocol.simple_query(self._begin_clause(options))
                     except NeonConnectionError:
                         await self._quarantine_connection()
-                        await self._connect_and_pipeline_query(
-                            self._begin_clause(options), []
-                        )
+                        await self._connect_and_query(self._begin_clause(options), [])
                 else:
-                    await self._connect_and_pipeline_query(
-                        self._begin_clause(options), []
-                    )
+                    await self._connect_and_query(self._begin_clause(options), [])
 
                 protocol = self._protocol
                 assert protocol is not None

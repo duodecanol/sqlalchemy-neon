@@ -39,6 +39,7 @@ from sqlalchemy_neon.pg_protocol import (
     PGQueryResult,
     _BufferedReader,
     _ScramSHA256,
+    _PipelineAuthenticationRequired,
     _build_bind_message,
     _build_describe_message,
     _build_execute_message,
@@ -613,11 +614,183 @@ class TestPGProtocolStartup:
         assert password_bytes.startswith(b"md5")
 
     @pytest.mark.asyncio
+    async def test_startup_sasl_auth(self):
+        class ScramTransport:
+            def __init__(self):
+                self.sent: list[bytes] = []
+                self._phase = 0
+
+            async def send(self, data: bytes) -> None:
+                self.sent.append(data)
+
+            async def recv(self) -> bytes:
+                if self._phase == 0:
+                    self._phase += 1
+                    return _backend_msg(
+                        AUTH_MSG,
+                        struct.pack("!I", AUTH_SASL)
+                        + b"SCRAM-SHA-256\x00\x00",
+                    )
+
+                if self._phase == 1:
+                    self._phase += 1
+                    mechanism, response = self.sent[-1][5:].split(b"\x00", 1)
+                    assert mechanism == b"SCRAM-SHA-256"
+                    (length,) = struct.unpack("!I", response[:4])
+                    client_first = response[4 : 4 + length].decode()
+                    client_first_bare = client_first[3:]
+                    nonce = client_first_bare.split(",")[1][2:]
+                    self._server_first = (
+                        f"r={nonce}server,s={base64.b64encode(b'salt').decode()},i=4096"
+                    )
+                    self._client_first_bare = client_first_bare
+                    return _backend_msg(
+                        AUTH_MSG,
+                        struct.pack("!I", AUTH_SASL_CONTINUE)
+                        + self._server_first.encode(),
+                    )
+
+                if self._phase == 2:
+                    self._phase += 1
+                    client_final_without_proof = self.sent[-1][5:].decode().rsplit(
+                        ",p=", 1
+                    )[0]
+                    salted_password = hashlib.pbkdf2_hmac(
+                        "sha256",
+                        b"pass",
+                        b"salt",
+                        4096,
+                    )
+                    server_key = hmac.new(
+                        salted_password,
+                        b"Server Key",
+                        hashlib.sha256,
+                    ).digest()
+                    auth_message = ",".join(
+                        (
+                            self._client_first_bare,
+                            self._server_first,
+                            client_final_without_proof,
+                        )
+                    )
+                    server_final = "v=" + base64.b64encode(
+                        hmac.new(
+                            server_key,
+                            auth_message.encode(),
+                            hashlib.sha256,
+                        ).digest()
+                    ).decode()
+                    return (
+                        _backend_msg(
+                            AUTH_MSG,
+                            struct.pack("!I", AUTH_SASL_FINAL)
+                            + server_final.encode(),
+                        )
+                        + _auth_ok()
+                        + _param_status("server_version", "16.0")
+                        + _backend_key(1, 2)
+                        + _ready_for_query()
+                    )
+
+                raise NeonConnectionError("Unexpected SCRAM server read")
+
+        transport = ScramTransport()
+        proto = PGProtocol(transport.send, transport.recv)
+
+        params = await proto.startup("user", "pass", "db")
+
+        assert params["server_version"] == "16.0"
+        assert len(transport.sent) == 3
+
+    @pytest.mark.asyncio
     async def test_startup_error_raises(self):
         transport = MockTransport([_error_response(message="no such database")])
         proto = PGProtocol(transport.send, transport.recv)
         with pytest.raises(NeonAuthenticationError, match="no such database"):
             await proto.startup("user", "pass", "baddb")
+
+    @pytest.mark.asyncio
+    async def test_startup_refuses_cleartext_authentication_without_transport_security(
+        self,
+    ):
+        transport = MockTransport([_auth_cleartext()])
+        proto = PGProtocol(
+            transport.send,
+            transport.recv,
+            allow_insecure_password_auth=False,
+        )
+
+        with pytest.raises(NeonAuthenticationError, match="secure transport"):
+            await proto.startup("user", "pass", "db")
+
+        assert len(transport.sent) == 1
+        assert b"pass\x00" not in transport.sent[0]
+
+    @pytest.mark.asyncio
+    async def test_startup_refuses_md5_authentication_without_transport_security(
+        self,
+    ):
+        transport = MockTransport([_auth_md5(b"\x01\x02\x03\x04")])
+        proto = PGProtocol(
+            transport.send,
+            transport.recv,
+            allow_insecure_password_auth=False,
+        )
+
+        with pytest.raises(NeonAuthenticationError, match="SCRAM-SHA-256"):
+            await proto.startup("user", "pass", "db")
+
+        assert len(transport.sent) == 1
+
+
+class TestPGProtocolStartupWithQuery:
+    @pytest.mark.asyncio
+    async def test_non_cleartext_authentication_requests_standard_negotiation(self):
+        transport = MockTransport(
+            [
+                _backend_msg(
+                    AUTH_MSG,
+                    struct.pack("!I", AUTH_SASL) + b"SCRAM-SHA-256\x00\x00",
+                )
+            ]
+        )
+        proto = PGProtocol(transport.send, transport.recv)
+
+        with pytest.raises(_PipelineAuthenticationRequired):
+            await proto.startup_with_query("user", "pass", "db", "SELECT 1", [])
+
+    @pytest.mark.asyncio
+    async def test_pipeline_refuses_cleartext_without_transport_security(self):
+        transport = MockTransport([])
+        proto = PGProtocol(
+            transport.send,
+            transport.recv,
+            allow_insecure_password_auth=False,
+        )
+
+        with pytest.raises(NeonAuthenticationError, match="secure transport"):
+            await proto.startup_with_query("user", "pass", "db", "SELECT 1", [])
+
+        assert transport.sent == []
+
+    @pytest.mark.asyncio
+    async def test_query_error_does_not_request_standard_negotiation(self):
+        transport = MockTransport(
+            [
+                _auth_ok()
+                + _param_status("server_version", "16.0")
+                + _backend_key(1, 2)
+                + _ready_for_query()
+                + _error_response(message="syntax error")
+                + _ready_for_query()
+            ]
+        )
+        proto = PGProtocol(transport.send, transport.recv)
+
+        with pytest.raises(NeonQueryError, match="syntax error"):
+            await proto.startup_with_query("user", "pass", "db", "INVALID SQL", [])
+
+        assert proto.transaction_status == "I"
 
 
 class TestPGProtocolSimpleQuery:

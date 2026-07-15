@@ -17,7 +17,16 @@ from sqlalchemy_neon.neon_http_client import (
     QueryResult,
     TransactionOptions,
 )
-from sqlalchemy_neon.errors import NeonConfigurationError, NeonTypeError
+from sqlalchemy_neon.errors import (
+    NeonAuthenticationError,
+    NeonConfigurationError,
+    NeonQueryError,
+    NeonTypeError,
+)
+from sqlalchemy_neon.pg_protocol import (
+    PGQueryResult,
+    _PipelineAuthenticationRequired,
+)
 
 
 class TestAsyncNeonHTTPClient:
@@ -316,6 +325,136 @@ async def test_websocket_connection_does_not_require_logfire(monkeypatch):
 
     await protocol._send(b"outbound-frame")
     assert websocket.sent == [b"outbound-frame"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_query_falls_back_to_standard_authentication(monkeypatch):
+    class PipelineProtocol:
+        async def startup_with_query(self, user, password, database, sql, params):
+            raise _PipelineAuthenticationRequired(
+                "Pipeline requires authentication negotiation for auth type 10."
+            )
+
+    class NegotiatingProtocol:
+        def __init__(self):
+            self.startup_calls: list[tuple[str, str, str]] = []
+            self.extended_query_calls: list[tuple[str, list[bytes | None]]] = []
+
+        async def startup(self, user, password, database):
+            self.startup_calls.append((user, password, database))
+
+        async def extended_query(self, sql, params):
+            self.extended_query_calls.append((sql, params))
+            return PGQueryResult(fields=[], rows=[], command_tag="SELECT 0")
+
+    class FakeWebSocket:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db"
+    )
+    pipeline_protocol = PipelineProtocol()
+    negotiating_protocol = NegotiatingProtocol()
+    protocols = [pipeline_protocol, negotiating_protocol]
+    connection_count = 0
+
+    async def establish():
+        nonlocal connection_count
+        protocol = protocols.pop(0)
+        connection_count += 1
+        client._protocol = protocol
+        client._ws = FakeWebSocket()
+        return protocol
+
+    monkeypatch.setattr(client, "_establish_websocket_connection", establish)
+
+    result = await client.query("SELECT 1")
+
+    assert result.command == "SELECT"
+    assert connection_count == 2
+    assert negotiating_protocol.startup_calls == [("user", "pass", "db")]
+    assert negotiating_protocol.extended_query_calls == [("SELECT 1", [])]
+
+
+@pytest.mark.asyncio
+async def test_websocket_query_does_not_retry_sql_errors(monkeypatch):
+    class PipelineProtocol:
+        async def startup_with_query(self, user, password, database, sql, params):
+            raise NeonQueryError("syntax error")
+
+    class FakeWebSocket:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db"
+    )
+    connection_count = 0
+
+    async def establish():
+        nonlocal connection_count
+        connection_count += 1
+        protocol = PipelineProtocol()
+        client._protocol = protocol
+        client._ws = FakeWebSocket()
+        return protocol
+
+    monkeypatch.setattr(client, "_establish_websocket_connection", establish)
+
+    with pytest.raises(NeonQueryError, match="syntax error"):
+        await client.query("INVALID SQL")
+
+    assert connection_count == 1
+
+
+
+@pytest.mark.asyncio
+async def test_insecure_websocket_refuses_cleartext_authentication(monkeypatch):
+    import struct
+
+    class FakeMessage:
+        type = aiohttp.WSMsgType.BINARY
+        data = b"R" + struct.pack("!I", 8) + struct.pack("!I", 3)
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.closed = False
+            self.sent: list[bytes] = []
+
+        async def send_bytes(self, data):
+            self.sent.append(data)
+
+        async def receive(self):
+            return FakeMessage()
+
+        async def close(self):
+            self.closed = True
+
+    class FakeClient:
+        async def ws_connect(self, *args, **kwargs):
+            return websocket
+
+    websocket = FakeWebSocket()
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db",
+        use_secure_websocket=False,
+    )
+
+    async def ensure_client():
+        return FakeClient()
+
+    monkeypatch.setattr(client, "_ensure_client", ensure_client)
+
+    with pytest.raises(NeonAuthenticationError, match="secure transport"):
+        await client.query("SELECT 1")
+
+    assert websocket.sent
+    assert b"pass\x00" not in b"".join(websocket.sent)
 
 @pytest.mark.asyncio
 async def test_websocket_pool_reuses_and_limits_clients(monkeypatch):
