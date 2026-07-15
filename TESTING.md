@@ -10,6 +10,22 @@ This package includes comprehensive integration tests that validate all major SQ
 > only. The suite refuses DDL unless its test-only URL, an explicit destructive
 > opt-in, and an exact database-name allowlist are all configured.
 
+## Credential Rotation
+
+Treat a credential exposed outside an approved secret store as compromised. Reset
+the Neon database role password through the [Neon Console or reset-role-password
+API](https://api.neon.tech/reference/reset-role-password), then replace the
+connection string only in local secret files and CI secret stores. The old
+connection string stops working after a password reset.
+
+- Keep local credentials in ignored files such as `.envrc`; never commit, paste,
+  or print them.
+- Update `NEON_TEST_DATABASE_URL` and any deployment secret after rotation.
+- Revoke or replace related API and telemetry tokens if they were exposed with
+  the connection string.
+- Run the repository secret scan before opening a pull request; the
+  `Secret scan` workflow enforces this on pushes and pull requests.
+
 ## Test Structure
 
 ### Unit Tests (No Database Required)
