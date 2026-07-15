@@ -398,6 +398,35 @@ class TestBufferedReader:
         assert await reader.read_exact(1) == b"F"
 
     @pytest.mark.asyncio
+    async def test_has_pending_data_tracks_unread_bytes(self):
+        async def recv():
+            return b"ABC"
+
+        reader = _BufferedReader(recv)
+        assert reader.has_pending_data is False
+        assert await reader.read_exact(1) == b"A"
+        assert reader.has_pending_data is True
+        assert await reader.read_exact(2) == b"BC"
+        assert reader.has_pending_data is False
+
+    def test_protocol_reusability_requires_idle_clean_state(self):
+        async def send(data: bytes):
+            return None
+
+        async def recv():
+            return b""
+
+        protocol = PGProtocol(send, recv)
+        assert protocol.is_reusable is True
+
+        protocol._txn_status = ord("T")
+        assert protocol.is_reusable is False
+
+        protocol._txn_status = ord("I")
+        protocol._reader._buffer.extend(b"unread")
+        assert protocol.is_reusable is False
+
+    @pytest.mark.asyncio
     async def test_read_message(self):
         # Build a ReadyForQuery ('Z') message
         payload = b"I"

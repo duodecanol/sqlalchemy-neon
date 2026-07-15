@@ -488,19 +488,39 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
 
         return self._protocol
 
+    @property
+    def is_reusable(self) -> bool:
+        """Whether this client can safely serve a different pool borrower."""
+        return (
+            self._protocol is not None
+            and self._protocol.is_reusable
+            and self._ws is not None
+            and not self._ws.closed
+        )
+
     async def _close_connection(self) -> None:
-        if self._protocol is not None:
+        protocol = self._protocol
+        websocket = self._ws
+        self._protocol = None
+        self._ws = None
+
+        if protocol is not None:
             try:
-                await self._protocol.terminate()
+                await protocol.terminate()
             except Exception:
                 pass
-            self._protocol = None
-        if self._ws is not None:
+        if websocket is not None:
             try:
-                await self._ws.close()
+                await websocket.close()
             except Exception:
                 pass
-            self._ws = None
+
+    async def _quarantine_connection(self) -> None:
+        """Detach an uncertain connection without masking the original error."""
+        try:
+            await self.force_close()
+        except BaseException:
+            pass
 
     def _pg_result_to_query_result(
         self,
@@ -601,26 +621,30 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
     ) -> QueryResult:
         options = options or QueryOptions()
         async with self._request_lock:
-            text_params = self._type_converter.convert_params(params)
-            byte_params: list[bytes | None] = [
-                p.encode() if p is not None else None for p in text_params
-            ]
+            try:
+                text_params = self._type_converter.convert_params(params)
+                byte_params: list[bytes | None] = [
+                    p.encode() if p is not None else None for p in text_params
+                ]
 
-            if self._protocol is not None and self._ws is not None and not self._ws.closed:
-                try:
-                    pg_result = await self._protocol.extended_query(sql, byte_params)
-                    return self._pg_result_to_query_result(
-                        pg_result, array_mode=options.array_mode
-                    )
-                except NeonConnectionError:
-                    # Fallthrough to reconnect
-                    pass
+                if self.is_reusable:
+                    protocol = self._protocol
+                    assert protocol is not None
+                    try:
+                        pg_result = await protocol.extended_query(sql, byte_params)
+                        return self._pg_result_to_query_result(
+                            pg_result, array_mode=options.array_mode
+                        )
+                    except NeonConnectionError:
+                        await self._quarantine_connection()
 
-            # Not connected or connection failed, use pipeline
-            pg_result = await self._connect_and_pipeline_query(sql, byte_params)
-            return self._pg_result_to_query_result(
-                pg_result, array_mode=options.array_mode
-            )
+                pg_result = await self._connect_and_pipeline_query(sql, byte_params)
+                return self._pg_result_to_query_result(
+                    pg_result, array_mode=options.array_mode
+                )
+            except BaseException:
+                await self._quarantine_connection()
+                raise
 
     async def transaction(
         self,
@@ -630,24 +654,25 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options = options or TransactionOptions()
 
         async with self._request_lock:
-            # Ensure connection (pipeline first query if possible?)
-            # For transaction, we can pipeline the BEGIN statement.
-            
-            if self._protocol is None or self._ws is None or self._ws.closed:
-                 await self._connect_and_pipeline_query(self._begin_clause(options), [])
-            else:
-                 # Check if alive?
-                 try:
-                     await self._protocol.simple_query(self._begin_clause(options))
-                 except NeonConnectionError:
-                     # Reconnect and pipeline
-                     await self._connect_and_pipeline_query(self._begin_clause(options), [])
-
-            protocol = self._protocol
-            assert protocol is not None # Should be connected now
-
-            results: Sequence[QueryResult] = []
             try:
+                if self.is_reusable:
+                    protocol = self._protocol
+                    assert protocol is not None
+                    try:
+                        await protocol.simple_query(self._begin_clause(options))
+                    except NeonConnectionError:
+                        await self._quarantine_connection()
+                        await self._connect_and_pipeline_query(
+                            self._begin_clause(options), []
+                        )
+                else:
+                    await self._connect_and_pipeline_query(
+                        self._begin_clause(options), []
+                    )
+
+                protocol = self._protocol
+                assert protocol is not None
+                results: list[QueryResult] = []
                 for sql, params in queries:
                     text_params = self._type_converter.convert_params(params)
                     byte_params: list[bytes | None] = [
@@ -661,19 +686,15 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
                     )
                 await protocol.simple_query("COMMIT")
                 return results
-            except NeonConnectionError:
-                try:
-                    await protocol.simple_query("ROLLBACK")
-                except Exception:
-                    pass
-                await self._close_connection()
+            except BaseException:
+                protocol = self._protocol
+                if protocol is not None:
+                    try:
+                        await protocol.simple_query("ROLLBACK")
+                    except BaseException:
+                        pass
+                await self._quarantine_connection()
                 raise
-            except NeonQueryError as e:
-                try:
-                    await protocol.simple_query("ROLLBACK")
-                except Exception:
-                    pass
-                raise NeonTransactionError(str(e)) from e
 
     async def close(self) -> None:
         await self._close_connection()
@@ -734,6 +755,11 @@ class AsyncNeonWebSocketPool:
         self._clients.add(client)
         return client
 
+    async def _discard(self, client: AsyncNeonWebSocketClient) -> None:
+        self._leased.discard(client)
+        self._clients.discard(client)
+        await client.force_close()
+
     async def acquire(self) -> AsyncNeonWebSocketClient:
         if self._closed:
             raise NeonConnectionError("WebSocket pool is closed.")
@@ -741,11 +767,15 @@ class AsyncNeonWebSocketPool:
         while True:
             try:
                 client = self._available.get_nowait()
-                if client in self._clients:
+            except asyncio.QueueEmpty:
+                client = None
+
+            if client is not None:
+                if client in self._clients and client.is_reusable:
                     self._leased.add(client)
                     return client
-            except asyncio.QueueEmpty:
-                pass
+                await self._discard(client)
+                continue
 
             async with self._create_lock:
                 if len(self._clients) < self._max_size:
@@ -754,18 +784,19 @@ class AsyncNeonWebSocketPool:
                     return client
 
             client = await self._available.get()
-            if client in self._clients:
-                self._leased.add(client)
-                return client
+            if client not in self._clients or not client.is_reusable:
+                await self._discard(client)
+                continue
+            self._leased.add(client)
+            return client
 
     async def release(self, client: AsyncNeonWebSocketClient) -> None:
         if client not in self._leased:
             return
 
         self._leased.remove(client)
-        if self._closed:
-            self._clients.discard(client)
-            await client.force_close()
+        if self._closed or not client.is_reusable:
+            await self._discard(client)
             return
 
         await self._available.put(client)
@@ -775,7 +806,13 @@ class AsyncNeonWebSocketPool:
         client = await self.acquire()
         try:
             yield client
-        finally:
+        except BaseException:
+            try:
+                await self._discard(client)
+            except BaseException:
+                pass
+            raise
+        else:
             await self.release(client)
 
     async def query(

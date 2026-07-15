@@ -152,6 +152,11 @@ class _BufferedReader:
 
         return result
 
+    @property
+    def has_pending_data(self) -> bool:
+        """Whether unread PostgreSQL wire bytes remain in the buffer."""
+        return self._pos < len(self._buffer)
+
     async def read_message(self) -> tuple[int, bytes]:
         """Read a complete backend message.
 
@@ -440,6 +445,11 @@ class PGProtocol:
     @property
     def transaction_status(self) -> str:
         return chr(self._txn_status)
+
+    @property
+    def is_reusable(self) -> bool:
+        """Whether the protocol is idle with no unread wire data."""
+        return self._txn_status == TXN_IDLE and not self._reader.has_pending_data
 
     # ------------------------------------------------------------------
     # Startup & authentication
