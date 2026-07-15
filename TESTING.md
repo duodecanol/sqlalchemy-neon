@@ -4,6 +4,12 @@
 
 This package includes comprehensive integration tests that validate all major SQLAlchemy query patterns and database operations against a live Neon database.
 
+> [!WARNING]
+> Integration fixtures run `drop_all()` and `create_all()` against the target
+> database's `public` schema. Use a dedicated, disposable Neon branch or database
+> only. The suite refuses DDL unless its test-only URL, an explicit destructive
+> opt-in, and an exact database-name allowlist are all configured.
+
 ## Test Structure
 
 ### Unit Tests (No Database Required)
@@ -22,7 +28,7 @@ pytest tests/ -k "not integration" -v
 
 ### Integration Tests (Requires Live Database)
 
-`tests/test_integration.py` contains comprehensive integration tests covering:
+`tests/integration/` contains comprehensive integration tests covering:
 
 #### Test Models
 
@@ -96,8 +102,10 @@ Parallel async versions of the key test categories:
 ### Setup
 
 ```bash
-# Set your Neon database URL
-export NEON_DATABASE_URL="postgresql://username:password@ep-xyz.us-east-1.aws.neon.tech/neondb"
+# Configure a dedicated disposable test database. It is dropped and recreated.
+export NEON_TEST_DATABASE_URL="postgresql://username:password@ep-xyz.us-east-1.aws.neon.tech/neondb_test"
+export NEON_TEST_ALLOWED_DATABASES="neondb_test"
+export NEON_TEST_ALLOW_DESTRUCTIVE=1
 
 # Activate virtual environment
 source .venv/bin/activate
@@ -110,22 +118,22 @@ pip install -e ".[dev]"
 
 ```bash
 # Run all integration tests
-pytest tests/test_integration.py -v
+pytest tests/integration -v
 
 # Run specific test class
-pytest tests/test_integration.py::TestSyncBasicCRUD -v
+pytest tests/integration/test_integration_basics.py::TestAsyncBasicCRUD -v
 
 # Run specific test
-pytest tests/test_integration.py::TestSyncBasicCRUD::test_insert_single_user -v
+pytest tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_single_user -v
 
 # Run only sync tests
-pytest tests/test_integration.py -k "Sync" -v
+pytest tests/integration -k "Sync" -v
 
 # Run only async tests
-pytest tests/test_integration.py -k "Async" -v
+pytest tests/integration -k "Async" -v
 
 # Show detailed output
-pytest tests/test_integration.py -v -s
+pytest tests/integration -v -s
 ```
 
 ### Expected Results
@@ -133,12 +141,11 @@ pytest tests/test_integration.py -v -s
 All tests should pass with a live Neon connection:
 
 ```
-tests/test_integration.py::TestSyncBasicCRUD::test_insert_single_user PASSED
-tests/test_integration.py::TestSyncBasicCRUD::test_insert_multiple_users PASSED
-tests/test_integration.py::TestSyncBasicCRUD::test_select_all_users PASSED
+tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_single_user PASSED
+tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_multiple_users PASSED
 ...
-tests/test_integration.py::TestAsyncBasicCRUD::test_insert_and_select_async PASSED
-tests/test_integration.py::TestAsyncBasicCRUD::test_update_async PASSED
+tests/integration/test_pipeline.py::test_pipeline_happy_path PASSED
+tests/integration/test_pipeline.py::test_pipeline_query_error PASSED
 ...
 
 ================= XX passed in X.XXs =================
@@ -210,12 +217,21 @@ with session.begin_nested():
 
 ## Troubleshooting
 
-### "NEON_DATABASE_URL environment variable not set"
+### "NEON_TEST_DATABASE_URL environment variable not set"
 
-Set the environment variable before running tests:
+Set a dedicated test database URL before running live tests:
 ```bash
-export NEON_DATABASE_URL="postgresql://user:pass@host.neon.tech/db"
+export NEON_TEST_DATABASE_URL="postgresql://user:pass@host.neon.tech/neondb_test"
+export NEON_TEST_ALLOWED_DATABASES="neondb_test"
+export NEON_TEST_ALLOW_DESTRUCTIVE=1
 ```
+
+### "Database ... is not in NEON_TEST_ALLOWED_DATABASES"
+
+The fixture failed before issuing DDL. Verify that the database name in
+`NEON_TEST_DATABASE_URL` exactly matches the dedicated test database listed in
+`NEON_TEST_ALLOWED_DATABASES`; do not add a shared, staging, or production
+database to the allowlist.
 
 ### "Connection refused" or timeout errors
 
@@ -228,9 +244,9 @@ export NEON_DATABASE_URL="postgresql://user:pass@host.neon.tech/db"
 
 The tests use `scope="module"` fixtures that clean up after themselves. If tests fail:
 
-1. Check if there's test data left over: Connect to your DB and check for tables like `users`, `posts`, etc.
-2. Manually drop test tables if needed
-3. Re-run tests
+1. Check for leftover data only in the dedicated test database.
+2. Manually clean up only that disposable test database if needed.
+3. Re-run tests.
 
 ### Async test failures
 
@@ -257,9 +273,10 @@ xdg-open htmlcov/index.html  # Linux
 
 To run these tests in CI/CD:
 
-1. Set `NEON_DATABASE_URL` as a secret environment variable
-2. Use a dedicated test database (not production!)
-3. Consider using Neon's branching feature for isolated test databases
+1. Store `NEON_TEST_DATABASE_URL` as a secret environment variable.
+2. Set `NEON_TEST_ALLOWED_DATABASES` to its exact dedicated test database name.
+3. Set `NEON_TEST_ALLOW_DESTRUCTIVE=1` only in the job that runs destructive tests.
+4. Use a dedicated disposable Neon branch or database, never production.
 
 Example GitHub Actions workflow:
 
@@ -277,9 +294,11 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -e ".[dev]"
-      - run: pytest tests/test_integration.py -v
+      - run: pytest tests/integration -v
         env:
-          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          NEON_TEST_DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
+          NEON_TEST_ALLOWED_DATABASES: neondb_test
+          NEON_TEST_ALLOW_DESTRUCTIVE: "1"
 ```
 
 ## Adding New Tests

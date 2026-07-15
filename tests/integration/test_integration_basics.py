@@ -1,10 +1,10 @@
 """
 Integration tests for SQLAlchemy Neon driver with comprehensive query patterns.
 
-These tests require a live Neon database connection. Set the NEON_DATABASE_URL
-environment variable to run these tests:
+These tests require a dedicated live Neon test database. The test fixture drops
+and recreates its public-schema tables, so set all destructive-test gates before
+running it; see TESTING.md for the required `NEON_TEST_*` variables.
 
-    export NEON_DATABASE_URL="postgresql://user:pass@host.neon.tech/db"
     pytest tests/integration/test_integration_basics.py
 
 Tests cover:

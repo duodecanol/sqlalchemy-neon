@@ -25,17 +25,17 @@ import logfire
 
 
 @pytest.fixture(scope="session")
-def object_propagator(require_neon):
+def object_propagator(require_destructive_neon):
     from sqlalchemy import create_engine
 
     with logfire.span("Pytest: object_propagator"):
-        neon_url = require_neon.replace("postgresql://", "postgresql+psycopg://")
+        neon_url = require_destructive_neon.replace("postgresql://", "postgresql+psycopg://")
         engine = create_engine(neon_url, echo=True)
 
         # Create all tables
-        with engine.begin():
-            Base.metadata.drop_all(engine)
-            Base.metadata.create_all(engine)
+        with engine.begin() as connection:
+            Base.metadata.drop_all(connection)
+            Base.metadata.create_all(connection)
 
         yield engine
 

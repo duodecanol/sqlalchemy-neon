@@ -1,14 +1,11 @@
 import pytest
-import os
 from sqlalchemy_neon.neon_http_client import AsyncNeonWebSocketClient
 from sqlalchemy_neon.errors import NeonAuthenticationError, NeonQueryError
 
 @pytest.mark.asyncio
-async def test_pipeline_happy_path():
+async def test_pipeline_happy_path(require_neon):
     """Test that a query executes successfully with pipelining."""
-    connection_string = os.environ.get("NEON_DATABASE_URL")
-    if not connection_string:
-        pytest.skip("NEON_DATABASE_URL not set")
+    connection_string = require_neon
 
     # Manually use the client to ensure we are testing the query method logic
     async with AsyncNeonWebSocketClient(connection_string) as client:
@@ -24,11 +21,9 @@ async def test_pipeline_happy_path():
         assert result2.rows[0]["val"] == 2
 
 @pytest.mark.asyncio
-async def test_pipeline_auth_fail():
+async def test_pipeline_auth_fail(require_neon):
     """Test that pipelining fails correctly with wrong password."""
-    connection_string = os.environ.get("NEON_DATABASE_URL")
-    if not connection_string:
-        pytest.skip("NEON_DATABASE_URL not set")
+    connection_string = require_neon
     
     # Modify connection string to have wrong password
     from urllib.parse import urlparse, urlunparse
@@ -46,11 +41,9 @@ async def test_pipeline_auth_fail():
             await client.query("SELECT 1")
 
 @pytest.mark.asyncio
-async def test_pipeline_query_error():
+async def test_pipeline_query_error(require_neon):
     """Test that pipeline connects but returns query error if SQL is bad."""
-    connection_string = os.environ.get("NEON_DATABASE_URL")
-    if not connection_string:
-        pytest.skip("NEON_DATABASE_URL not set")
+    connection_string = require_neon
 
     async with AsyncNeonWebSocketClient(connection_string) as client:
         # First query is bad SQL
