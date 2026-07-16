@@ -14,6 +14,7 @@ from sqlalchemy_neon.neon_http_client import (
     NeonWebSocketClient,
     NeonHTTPClient,
     IsolationLevel,
+    QueryOptions,
     QueryResult,
     TransactionOptions,
 )
@@ -179,6 +180,13 @@ class TestAsyncNeonWebSocketClient:
             "postgresql://user:pass@host.neon.tech/db"
         )
         assert client._ws_url == "wss://host.neon.tech/v2"
+
+    def test_rejects_auth_token(self):
+        with pytest.raises(NeonConfigurationError, match="auth_token"):
+            AsyncNeonWebSocketClient(
+                "postgresql://user:pass@host.neon.tech/db",
+                auth_token="jwt-token",
+            )
 
 
 class TestTransactionOptions:
@@ -456,6 +464,29 @@ async def test_insecure_websocket_refuses_cleartext_authentication(monkeypatch):
     assert websocket.sent
     assert b"pass\x00" not in b"".join(websocket.sent)
 
+
+@pytest.mark.asyncio
+async def test_websocket_query_rejects_auth_token_option():
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db"
+    )
+
+    with pytest.raises(NeonConfigurationError, match="auth_token"):
+        await client.query("SELECT 1", options=QueryOptions(auth_token="jwt-token"))
+
+
+@pytest.mark.asyncio
+async def test_websocket_transaction_rejects_auth_token_option():
+    client = AsyncNeonWebSocketClient(
+        "postgresql://user:pass@host.neon.tech/db"
+    )
+
+    with pytest.raises(NeonConfigurationError, match="auth_token"):
+        await client.transaction(
+            [("SELECT 1", [])],
+            options=TransactionOptions(auth_token="jwt-token"),
+        )
+
 @pytest.mark.asyncio
 async def test_websocket_pool_reuses_and_limits_clients(monkeypatch):
     import sqlalchemy_neon.neon_http_client as neon_http_client_module
@@ -671,4 +702,12 @@ def test_websocket_pool_validates_size():
         AsyncNeonWebSocketPool(
             "postgresql://user:pass@host.neon.tech/db",
             max_size=0,
+        )
+
+
+def test_websocket_pool_rejects_auth_token():
+    with pytest.raises(NeonConfigurationError, match="auth_token"):
+        AsyncNeonWebSocketPool(
+            "postgresql://user:pass@host.neon.tech/db",
+            auth_token="jwt-token",
         )

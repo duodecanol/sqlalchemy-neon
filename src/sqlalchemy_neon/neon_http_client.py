@@ -91,6 +91,14 @@ class TransactionOptions:
                 raise NeonConfigurationError("deferrable=True requires read_only=True")
 
 
+def _validate_websocket_auth_token(auth_token: str | None) -> None:
+    if auth_token is not None:
+        raise NeonConfigurationError(
+            "auth_token is not supported over the WebSocket transport; "
+            "use transport='http' for JWT/RLS."
+        )
+
+
 class AsyncNeonHTTPClient:
     """Async HTTP client for Neon serverless PostgreSQL API."""
 
@@ -401,6 +409,8 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
     ) -> None:
+        _validate_websocket_auth_token(auth_token)
+
         super().__init__(
             connection_string,
             http_client=http_client,
@@ -643,6 +653,8 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options: QueryOptions | None = None,
     ) -> QueryResult:
         options = options or QueryOptions()
+        _validate_websocket_auth_token(options.auth_token)
+
         async with self._request_lock:
             try:
                 text_params = self._type_converter.convert_params(params)
@@ -675,6 +687,8 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options: TransactionOptions | None = None,
     ) -> Sequence[QueryResult]:
         options = options or TransactionOptions()
+        _validate_websocket_auth_token(options.auth_token)
+
 
         async with self._request_lock:
             try:
@@ -741,6 +755,8 @@ class AsyncNeonWebSocketPool:
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
     ) -> None:
+        _validate_websocket_auth_token(auth_token)
+
         if max_size < 1:
             raise NeonConfigurationError("WebSocket pool max_size must be >= 1.")
 
