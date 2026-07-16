@@ -12,9 +12,12 @@ from sqlalchemy_neon.native_async_engine import (
     NeonNativeAsyncEngine,
     NativeAsyncResult,
     compile_sql,
+    create_neon_native_async_engine,
+    create_neon_ws_engine,
 )
 from sqlalchemy_neon.neon_http_client import QueryResult, TransactionOptions
 from sqlalchemy_neon.types import PostgresOID
+from sqlalchemy_neon.errors import NeonConfigurationError
 from testsupport.models import User, Post, Comment
 
 
@@ -75,6 +78,27 @@ def test_native_engine_rejects_unknown_transport(mock_connection_string: str):
         NeonNativeAsyncEngine(
             mock_connection_string,
             transport="grpc",  # type: ignore[arg-type]
+        )
+
+
+def test_native_engine_rejects_websocket_auth_token(mock_connection_string: str):
+    with pytest.raises(NeonConfigurationError, match="auth_token"):
+        NeonNativeAsyncEngine(
+            mock_connection_string,
+            transport="websocket",
+            auth_token="jwt-token",
+        )
+
+
+def test_websocket_engine_factories_reject_auth_token(mock_connection_string: str):
+    with pytest.raises(NeonConfigurationError, match="auth_token"):
+        create_neon_ws_engine(mock_connection_string, auth_token="jwt-token")
+
+    with pytest.raises(NeonConfigurationError, match="auth_token"):
+        create_neon_native_async_engine(
+            mock_connection_string,
+            transport="websocket",
+            auth_token="jwt-token",
         )
 
 
