@@ -103,11 +103,11 @@ class TransactionOptions:
                 raise NeonConfigurationError("deferrable=True requires read_only=True")
 
 
-def _validate_websocket_auth_token(auth_token: str | None) -> None:
+def _warn_ignored_websocket_auth_token(auth_token: str | None) -> None:
     if auth_token is not None:
-        raise NeonConfigurationError(
-            "auth_token is not supported over the WebSocket transport; "
-            "use transport='http' for JWT/RLS."
+        warnings.warn(
+            "auth_token is ignored over the WebSocket transport.",
+            stacklevel=3,
         )
 
 
@@ -439,12 +439,12 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
     ) -> None:
-        _validate_websocket_auth_token(auth_token)
+        _warn_ignored_websocket_auth_token(auth_token)
 
         super().__init__(
             connection_string,
             http_client=http_client,
-            auth_token=auth_token,
+            auth_token=None,
             timeout=timeout,
         )
 
@@ -683,7 +683,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options: QueryOptions | None = None,
     ) -> QueryResult:
         options = options or QueryOptions()
-        _validate_websocket_auth_token(options.auth_token)
+        _warn_ignored_websocket_auth_token(options.auth_token)
 
         async with self._request_lock:
             try:
@@ -717,7 +717,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options: TransactionOptions | None = None,
     ) -> Sequence[QueryResult]:
         options = options or TransactionOptions()
-        _validate_websocket_auth_token(options.auth_token)
+        _warn_ignored_websocket_auth_token(options.auth_token)
 
 
         async with self._request_lock:
@@ -785,7 +785,7 @@ class AsyncNeonWebSocketPool:
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
     ) -> None:
-        _validate_websocket_auth_token(auth_token)
+        _warn_ignored_websocket_auth_token(auth_token)
 
         if max_size < 1:
             raise NeonConfigurationError("WebSocket pool max_size must be >= 1.")
@@ -793,7 +793,7 @@ class AsyncNeonWebSocketPool:
         self._connection_string = connection_string
         self._max_size = max_size
         self._http_client = http_client
-        self._auth_token = auth_token
+        self._auth_token = None
         self._timeout = timeout
         self._ws_proxy = ws_proxy
         self._use_secure_websocket = use_secure_websocket

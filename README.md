@@ -59,7 +59,7 @@ postgresql://username:password@host:port/database?sslmode=require
 
 ### Driver keyword-only parameters
 
-- `auth_token`: JWT token for Row-Level Security on the HTTP transport. WebSocket transport rejects it.
+- `auth_token`: JWT token for Row-Level Security on the HTTP transport. WebSocket transport ignores it and emits a `UserWarning`.
 - `timeout`: Request timeout in seconds (default: 30)
 - `transport`: `"http"` (default) or `"websocket"`
 - `websocket_pool_size`: Max pooled WS connections when `transport="websocket"`
@@ -80,7 +80,7 @@ engine = create_neon_native_async_engine(
 )
 
 # WebSocket transport + pooled connections
-# WebSocket transport does not support auth_token. Use HTTP for JWT/RLS access.
+# WebSocket transport ignores auth_token and emits a UserWarning. Use HTTP for JWT/RLS access.
 ws_engine = create_neon_native_async_engine(
     "postgresql://user:pass@host.neon.tech/db",
     transport="websocket",

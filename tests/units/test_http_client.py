@@ -236,12 +236,16 @@ class TestAsyncNeonWebSocketClient:
         )
         assert client._ws_url == "wss://host.neon.tech/v2"
 
-    def test_rejects_auth_token(self):
-        with pytest.raises(NeonConfigurationError, match="auth_token"):
-            AsyncNeonWebSocketClient(
+    def test_ignores_auth_token(self):
+        with pytest.warns(UserWarning, match="auth_token") as warnings:
+            client = AsyncNeonWebSocketClient(
                 "postgresql://user:pass@host.neon.tech/db",
                 auth_token="jwt-token",
             )
+
+        assert len(warnings) == 1
+        assert "jwt-token" not in str(warnings[0].message)
+        assert client._auth_token is None
 
     def test_ignores_auth_token_url_parameter(self):
         with pytest.warns(UserWarning, match="auth_token"):
@@ -529,26 +533,55 @@ async def test_insecure_websocket_refuses_cleartext_authentication(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_websocket_query_rejects_auth_token_option():
+async def test_websocket_query_ignores_auth_token_option(monkeypatch):
     client = AsyncNeonWebSocketClient(
         "postgresql://user:pass@host.neon.tech/db"
     )
 
-    with pytest.raises(NeonConfigurationError, match="auth_token"):
-        await client.query("SELECT 1", options=QueryOptions(auth_token="jwt-token"))
+    async def connect_and_query(sql, params):
+        return PGQueryResult(fields=[], rows=[], command_tag="SELECT 0")
+
+    monkeypatch.setattr(client, "_connect_and_query", connect_and_query)
+
+    with pytest.warns(UserWarning, match="auth_token") as warnings:
+        result = await client.query(
+            "SELECT 1", options=QueryOptions(auth_token="jwt-token")
+        )
+
+    assert len(warnings) == 1
+    assert "jwt-token" not in str(warnings[0].message)
+    assert result.command == "SELECT"
 
 
 @pytest.mark.asyncio
-async def test_websocket_transaction_rejects_auth_token_option():
+async def test_websocket_transaction_ignores_auth_token_option():
+    class FakeProtocol:
+        is_reusable = True
+
+        async def simple_query(self, sql):
+            return None
+
+        async def extended_query(self, sql, params):
+            return PGQueryResult(fields=[], rows=[], command_tag="SELECT 0")
+
+    class FakeWebSocket:
+        closed = False
+
     client = AsyncNeonWebSocketClient(
         "postgresql://user:pass@host.neon.tech/db"
     )
+    client._protocol = FakeProtocol()
+    client._ws = FakeWebSocket()
 
-    with pytest.raises(NeonConfigurationError, match="auth_token"):
-        await client.transaction(
+    with pytest.warns(UserWarning, match="auth_token") as warnings:
+        results = await client.transaction(
             [("SELECT 1", [])],
             options=TransactionOptions(auth_token="jwt-token"),
         )
+
+    assert len(warnings) == 1
+    assert "jwt-token" not in str(warnings[0].message)
+    assert [result.command for result in results] == ["SELECT"]
 
 @pytest.mark.asyncio
 async def test_websocket_pool_reuses_and_limits_clients(monkeypatch):
@@ -768,9 +801,13 @@ def test_websocket_pool_validates_size():
         )
 
 
-def test_websocket_pool_rejects_auth_token():
-    with pytest.raises(NeonConfigurationError, match="auth_token"):
-        AsyncNeonWebSocketPool(
+def test_websocket_pool_ignores_auth_token():
+    with pytest.warns(UserWarning, match="auth_token") as warnings:
+        pool = AsyncNeonWebSocketPool(
             "postgresql://user:pass@host.neon.tech/db",
             auth_token="jwt-token",
         )
+
+    assert len(warnings) == 1
+    assert "jwt-token" not in str(warnings[0].message)
+    assert pool._auth_token is None
