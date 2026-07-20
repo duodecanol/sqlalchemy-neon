@@ -75,33 +75,39 @@ class TestAsyncNeonHTTPClient:
             "fetch_function",
         ],
     )
-    def test_rejects_driver_url_parameters_without_exposing_values(
+    def test_ignores_driver_url_parameters_without_exposing_values(
         self, parameter: str
     ):
-        with pytest.raises(NeonConfigurationError) as exc_info:
-            AsyncNeonHTTPClient(
+        with pytest.warns(UserWarning, match=parameter) as warnings:
+            client = AsyncNeonHTTPClient(
                 "postgresql://user:pass@host.neon.tech/db"
                 f"?{parameter}=sensitive-value"
             )
 
-        assert parameter in str(exc_info.value)
-        assert "sensitive-value" not in str(exc_info.value)
+        assert len(warnings) == 1
+        assert "sensitive-value" not in str(warnings[0].message)
+        assert parameter not in client._build_headers()["Neon-Connection-String"]
 
-    def test_rejects_blank_driver_url_parameter(self):
-        with pytest.raises(NeonConfigurationError, match="auth_token"):
-            AsyncNeonHTTPClient(
+    def test_ignores_blank_driver_url_parameter(self):
+        with pytest.warns(UserWarning, match="auth_token"):
+            client = AsyncNeonHTTPClient(
                 "postgresql://user:pass@host.neon.tech/db?auth_token="
             )
 
-    def test_rejects_repeated_driver_url_parameter_without_exposing_values(self):
-        with pytest.raises(NeonConfigurationError) as exc_info:
-            AsyncNeonHTTPClient(
+        assert "auth_token" not in client._build_headers()["Neon-Connection-String"]
+
+    def test_ignores_repeated_driver_url_parameter_without_exposing_values(self):
+        with pytest.warns(UserWarning, match="auth_token") as warnings:
+            client = AsyncNeonHTTPClient(
                 "postgresql://user:pass@host.neon.tech/db"
                 "?sslmode=require&auth_token=&auth_token=sensitive-value"
             )
 
-        assert "auth_token" in str(exc_info.value)
-        assert "sensitive-value" not in str(exc_info.value)
+        assert len(warnings) == 1
+        assert "sensitive-value" not in str(warnings[0].message)
+        assert client._build_headers()["Neon-Connection-String"].endswith(
+            "?sslmode=require"
+        )
 
     def test_preserves_postgresql_url_parameters(self):
         connection_string = (
@@ -237,11 +243,13 @@ class TestAsyncNeonWebSocketClient:
                 auth_token="jwt-token",
             )
 
-    def test_rejects_auth_token_url_parameter(self):
-        with pytest.raises(NeonConfigurationError, match="auth_token"):
-            AsyncNeonWebSocketClient(
+    def test_ignores_auth_token_url_parameter(self):
+        with pytest.warns(UserWarning, match="auth_token"):
+            client = AsyncNeonWebSocketClient(
                 "postgresql://user:pass@host.neon.tech/db?auth_token=jwt-token"
             )
+
+        assert client._connection_string.endswith("/db")
 
 
 class TestTransactionOptions:

@@ -8,6 +8,7 @@ import asyncio
 import inspect
 import json
 import re
+import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -127,10 +128,10 @@ class AsyncNeonHTTPClient:
             Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
         ) = None,
     ) -> None:
-        self._connection_string = connection_string
+        self._parsed_connection = self._parse_connection_string(connection_string)
+        self._connection_string = self._parsed_connection.geturl()
         self._auth_token = auth_token
         self._timeout = timeout
-        self._parsed_connection = self._parse_connection_string(connection_string)
         self._fetch_endpoint = fetch_endpoint
         self._fetch_function = fetch_function
         self._url = self._resolve_fetch_url(jwt_auth=bool(auth_token))
@@ -147,7 +148,7 @@ class AsyncNeonHTTPClient:
         self._type_converter = TypeConverter()
 
     def _parse_connection_string(self, connection_string: str) -> "ParseResult":
-        from urllib.parse import parse_qsl, urlparse
+        from urllib.parse import parse_qsl, urlencode, urlparse
 
         parsed = urlparse(connection_string)
         if parsed.scheme not in ("postgresql", "postgres"):
@@ -163,12 +164,22 @@ class AsyncNeonHTTPClient:
                 "Connection string must include a database name."
             )
 
-        for parameter, _ in parse_qsl(parsed.query, keep_blank_values=True):
+        driver_parameters: list[str] = []
+        connection_parameters: list[tuple[str, str]] = []
+        for parameter, value in parse_qsl(parsed.query, keep_blank_values=True):
             if parameter.lower() in _DRIVER_URL_PARAMETERS:
-                raise NeonConfigurationError(
-                    f"Query parameter '{parameter}' is a driver option and must be "
-                    "passed as a Python keyword argument."
-                )
+                driver_parameters.append(parameter)
+            else:
+                connection_parameters.append((parameter, value))
+
+        if driver_parameters:
+            ignored_parameters = ", ".join(dict.fromkeys(driver_parameters))
+            warnings.warn(
+                "Driver URL parameters are ignored; pass them as Python keyword "
+                f"arguments: {ignored_parameters}",
+                stacklevel=3,
+            )
+            parsed = parsed._replace(query=urlencode(connection_parameters))
 
         return parsed
 

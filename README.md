@@ -50,8 +50,8 @@ async def main():
 
 The connection URL may include PostgreSQL or Neon query parameters, such as
 `sslmode` or `options`. The driver preserves those parameters. Driver configuration
-is keyword-only; placing a driver option in the URL raises `NeonConfigurationError`,
-including for blank values.
+in the URL is ignored, removed before the connection string is forwarded, and emits
+a `UserWarning`; use Python keyword arguments when the setting must take effect.
 
 ```text
 postgresql://username:password@host:port/database?sslmode=require
@@ -66,8 +66,9 @@ postgresql://username:password@host:port/database?sslmode=require
 - `fetch_endpoint`: Override Neon HTTP endpoint URL (or provide resolver callable)
 - `fetch_function`: Inject custom async HTTP transport callable
 
-These options must not appear in the connection URL: `auth_token`, `timeout`,
-`transport`, `websocket_pool_size`, `fetch_endpoint`, or `fetch_function`.
+These options are ignored when present in the connection URL: `auth_token`,
+`timeout`, `transport`, `websocket_pool_size`, `fetch_endpoint`, or
+`fetch_function`. The driver emits a `UserWarning` and suppresses them.
 
 Example with parameters:
 
