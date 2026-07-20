@@ -57,6 +57,10 @@ a `UserWarning`; use Python keyword arguments when the setting must take effect.
 postgresql://username:password@host:port/database?sslmode=require
 ```
 
+Percent-encode reserved characters in the username, password, and database name.
+WebSocket startup decodes those URI components before PostgreSQL authentication;
+the HTTP transport preserves the encoded connection URL.
+
 ### Driver keyword-only parameters
 
 - `auth_token`: JWT token for Row-Level Security on the HTTP transport. WebSocket transport ignores it and emits a `UserWarning`.

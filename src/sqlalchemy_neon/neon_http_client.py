@@ -517,6 +517,16 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         )
         return self._protocol
 
+    def _decoded_credentials(self) -> tuple[str, str, str]:
+        from urllib.parse import unquote
+
+        connection = self._parsed_connection
+        return (
+            unquote(connection.username or ""),
+            unquote(connection.password or ""),
+            unquote((connection.path or "/neondb").lstrip("/")),
+        )
+
     async def _ensure_connection(self) -> PGProtocol:
         if self._protocol is not None and self._ws is not None and not self._ws.closed:
             return self._protocol
@@ -524,9 +534,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         await self._establish_websocket_connection()
         assert self._protocol is not None
 
-        user = self._parsed_connection.username or ""
-        password = self._parsed_connection.password or ""
-        database = (self._parsed_connection.path or "/neondb").lstrip("/")
+        user, password, database = self._decoded_credentials()
 
         try:
             await self._protocol.startup(user, password, database)
@@ -648,9 +656,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         await self._establish_websocket_connection()
         assert self._protocol is not None
 
-        user = self._parsed_connection.username or ""
-        password = self._parsed_connection.password or ""
-        database = (self._parsed_connection.path or "/neondb").lstrip("/")
+        user, password, database = self._decoded_credentials()
 
         try:
             _, query_result = await self._protocol.startup_with_query(
