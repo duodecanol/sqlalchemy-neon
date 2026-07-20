@@ -118,6 +118,15 @@ class TestAsyncNeonHTTPClient:
 
         assert client._build_headers()["Neon-Connection-String"] == connection_string
 
+    def test_preserves_encoded_credentials_in_connection_header(self):
+        connection_string = (
+            "postgresql://user%40acme%3Adev:pa+ss%2Bword%25@host.neon.tech/"
+            "my%20db%2Fname"
+        )
+        client = AsyncNeonHTTPClient(connection_string)
+
+        assert client._build_headers()["Neon-Connection-String"] == connection_string
+
     def test_build_headers_basic(self):
         """Test building basic headers."""
         client = AsyncNeonHTTPClient("postgresql://user:pass@host.neon.tech/db")
@@ -405,7 +414,13 @@ async def test_websocket_connection_does_not_require_logfire(monkeypatch):
 @pytest.mark.asyncio
 async def test_websocket_query_falls_back_to_standard_authentication(monkeypatch):
     class PipelineProtocol:
+        def __init__(self):
+            self.startup_calls: list[
+                tuple[str, str, str, str, list[bytes | None]]
+            ] = []
+
         async def startup_with_query(self, user, password, database, sql, params):
+            self.startup_calls.append((user, password, database, sql, params))
             raise _PipelineAuthenticationRequired(
                 "Pipeline requires authentication negotiation for auth type 10."
             )
@@ -429,7 +444,8 @@ async def test_websocket_query_falls_back_to_standard_authentication(monkeypatch
             self.closed = True
 
     client = AsyncNeonWebSocketClient(
-        "postgresql://user:pass@host.neon.tech/db"
+        "postgresql://user%40acme%3Adev:pa+ss%2Bword%25@host.neon.tech/"
+        "my%20db%2Fname"
     )
     pipeline_protocol = PipelineProtocol()
     negotiating_protocol = NegotiatingProtocol()
@@ -448,9 +464,13 @@ async def test_websocket_query_falls_back_to_standard_authentication(monkeypatch
 
     result = await client.query("SELECT 1")
 
+    expected_credentials = ("user@acme:dev", "pa+ss+word%", "my db/name")
     assert result.command == "SELECT"
     assert connection_count == 2
-    assert negotiating_protocol.startup_calls == [("user", "pass", "db")]
+    assert pipeline_protocol.startup_calls == [
+        (*expected_credentials, "SELECT 1", [])
+    ]
+    assert negotiating_protocol.startup_calls == [expected_credentials]
     assert negotiating_protocol.extended_query_calls == [("SELECT 1", [])]
 
 
