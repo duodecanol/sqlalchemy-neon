@@ -35,6 +35,17 @@ if TYPE_CHECKING:
 
 
 _FIRST_WORD_REGEX = re.compile(r"^[^.]+\.")
+_DRIVER_URL_PARAMETERS = frozenset(
+    {
+        "auth_token",
+        "timeout",
+        "transport",
+        "websocket_pool_size",
+        "fetch_endpoint",
+        "fetch_function",
+    }
+)
+
 
 
 class IsolationLevel(Enum):
@@ -136,7 +147,7 @@ class AsyncNeonHTTPClient:
         self._type_converter = TypeConverter()
 
     def _parse_connection_string(self, connection_string: str) -> "ParseResult":
-        from urllib.parse import urlparse
+        from urllib.parse import parse_qsl, urlparse
 
         parsed = urlparse(connection_string)
         if parsed.scheme not in ("postgresql", "postgres"):
@@ -151,6 +162,14 @@ class AsyncNeonHTTPClient:
             raise NeonConfigurationError(
                 "Connection string must include a database name."
             )
+
+        for parameter, _ in parse_qsl(parsed.query, keep_blank_values=True):
+            if parameter.lower() in _DRIVER_URL_PARAMETERS:
+                raise NeonConfigurationError(
+                    f"Query parameter '{parameter}' is a driver option and must be "
+                    "passed as a Python keyword argument."
+                )
+
         return parsed
 
     def _default_fetch_endpoint(self, host: str, *, jwt_auth: bool = False) -> str:

@@ -48,13 +48,16 @@ async def main():
 
 ## Connection String Format
 
-The connection string format is:
+The connection URL may include PostgreSQL or Neon query parameters, such as
+`sslmode` or `options`. The driver preserves those parameters. Driver configuration
+is keyword-only; placing a driver option in the URL raises `NeonConfigurationError`,
+including for blank values.
 
-```
-postgresql://username:password@host:port/database?param=value
+```text
+postgresql://username:password@host:port/database?sslmode=require
 ```
 
-### Optional Parameters
+### Driver keyword-only parameters
 
 - `auth_token`: JWT token for Row-Level Security on the HTTP transport. WebSocket transport rejects it.
 - `timeout`: Request timeout in seconds (default: 30)
@@ -62,7 +65,9 @@ postgresql://username:password@host:port/database?param=value
 - `websocket_pool_size`: Max pooled WS connections when `transport="websocket"`
 - `fetch_endpoint`: Override Neon HTTP endpoint URL (or provide resolver callable)
 - `fetch_function`: Inject custom async HTTP transport callable
-- `sslmode`: SSL mode (same as PostgreSQL)
+
+These options must not appear in the connection URL: `auth_token`, `timeout`,
+`transport`, `websocket_pool_size`, `fetch_endpoint`, or `fetch_function`.
 
 Example with parameters:
 
