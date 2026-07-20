@@ -17,7 +17,6 @@ from sqlalchemy_neon.native_async_engine import (
 )
 from sqlalchemy_neon.neon_http_client import QueryResult, TransactionOptions
 from sqlalchemy_neon.types import PostgresOID
-from sqlalchemy_neon.errors import NeonConfigurationError
 from testsupport.models import User, Post, Comment
 
 
@@ -81,25 +80,34 @@ def test_native_engine_rejects_unknown_transport(mock_connection_string: str):
         )
 
 
-def test_native_engine_rejects_websocket_auth_token(mock_connection_string: str):
-    with pytest.raises(NeonConfigurationError, match="auth_token"):
-        NeonNativeAsyncEngine(
+def test_native_engine_ignores_websocket_auth_token(mock_connection_string: str):
+    with pytest.warns(UserWarning, match="auth_token") as warnings:
+        engine = NeonNativeAsyncEngine(
             mock_connection_string,
             transport="websocket",
             auth_token="jwt-token",
         )
 
+    assert len(warnings) == 1
+    assert "jwt-token" not in str(warnings[0].message)
+    assert engine._client._auth_token is None
 
-def test_websocket_engine_factories_reject_auth_token(mock_connection_string: str):
-    with pytest.raises(NeonConfigurationError, match="auth_token"):
-        create_neon_ws_engine(mock_connection_string, auth_token="jwt-token")
 
-    with pytest.raises(NeonConfigurationError, match="auth_token"):
-        create_neon_native_async_engine(
+def test_websocket_engine_factories_ignore_auth_token(mock_connection_string: str):
+    with pytest.warns(UserWarning, match="auth_token"):
+        websocket_engine = create_neon_ws_engine(
+            mock_connection_string, auth_token="jwt-token"
+        )
+
+    with pytest.warns(UserWarning, match="auth_token"):
+        native_engine = create_neon_native_async_engine(
             mock_connection_string,
             transport="websocket",
             auth_token="jwt-token",
         )
+
+    assert websocket_engine._client._auth_token is None
+    assert native_engine._client._auth_token is None
 
 
 @pytest.mark.asyncio

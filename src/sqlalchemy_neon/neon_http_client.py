@@ -8,6 +8,7 @@ import asyncio
 import inspect
 import json
 import re
+import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -35,6 +36,17 @@ if TYPE_CHECKING:
 
 
 _FIRST_WORD_REGEX = re.compile(r"^[^.]+\.")
+_DRIVER_URL_PARAMETERS = frozenset(
+    {
+        "auth_token",
+        "timeout",
+        "transport",
+        "websocket_pool_size",
+        "fetch_endpoint",
+        "fetch_function",
+    }
+)
+
 
 
 class IsolationLevel(Enum):
@@ -91,11 +103,11 @@ class TransactionOptions:
                 raise NeonConfigurationError("deferrable=True requires read_only=True")
 
 
-def _validate_websocket_auth_token(auth_token: str | None) -> None:
+def _warn_ignored_websocket_auth_token(auth_token: str | None) -> None:
     if auth_token is not None:
-        raise NeonConfigurationError(
-            "auth_token is not supported over the WebSocket transport; "
-            "use transport='http' for JWT/RLS."
+        warnings.warn(
+            "auth_token is ignored over the WebSocket transport.",
+            stacklevel=3,
         )
 
 
@@ -116,10 +128,10 @@ class AsyncNeonHTTPClient:
             Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
         ) = None,
     ) -> None:
-        self._connection_string = connection_string
+        self._parsed_connection = self._parse_connection_string(connection_string)
+        self._connection_string = self._parsed_connection.geturl()
         self._auth_token = auth_token
         self._timeout = timeout
-        self._parsed_connection = self._parse_connection_string(connection_string)
         self._fetch_endpoint = fetch_endpoint
         self._fetch_function = fetch_function
         self._url = self._resolve_fetch_url(jwt_auth=bool(auth_token))
@@ -136,7 +148,7 @@ class AsyncNeonHTTPClient:
         self._type_converter = TypeConverter()
 
     def _parse_connection_string(self, connection_string: str) -> "ParseResult":
-        from urllib.parse import urlparse
+        from urllib.parse import parse_qsl, urlencode, urlparse
 
         parsed = urlparse(connection_string)
         if parsed.scheme not in ("postgresql", "postgres"):
@@ -151,6 +163,24 @@ class AsyncNeonHTTPClient:
             raise NeonConfigurationError(
                 "Connection string must include a database name."
             )
+
+        driver_parameters: list[str] = []
+        connection_parameters: list[tuple[str, str]] = []
+        for parameter, value in parse_qsl(parsed.query, keep_blank_values=True):
+            if parameter.lower() in _DRIVER_URL_PARAMETERS:
+                driver_parameters.append(parameter)
+            else:
+                connection_parameters.append((parameter, value))
+
+        if driver_parameters:
+            ignored_parameters = ", ".join(dict.fromkeys(driver_parameters))
+            warnings.warn(
+                "Driver URL parameters are ignored; pass them as Python keyword "
+                f"arguments: {ignored_parameters}",
+                stacklevel=3,
+            )
+            parsed = parsed._replace(query=urlencode(connection_parameters))
+
         return parsed
 
     def _default_fetch_endpoint(self, host: str, *, jwt_auth: bool = False) -> str:
@@ -409,12 +439,12 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
     ) -> None:
-        _validate_websocket_auth_token(auth_token)
+        _warn_ignored_websocket_auth_token(auth_token)
 
         super().__init__(
             connection_string,
             http_client=http_client,
-            auth_token=auth_token,
+            auth_token=None,
             timeout=timeout,
         )
 
@@ -653,7 +683,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options: QueryOptions | None = None,
     ) -> QueryResult:
         options = options or QueryOptions()
-        _validate_websocket_auth_token(options.auth_token)
+        _warn_ignored_websocket_auth_token(options.auth_token)
 
         async with self._request_lock:
             try:
@@ -687,7 +717,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         options: TransactionOptions | None = None,
     ) -> Sequence[QueryResult]:
         options = options or TransactionOptions()
-        _validate_websocket_auth_token(options.auth_token)
+        _warn_ignored_websocket_auth_token(options.auth_token)
 
 
         async with self._request_lock:
@@ -755,7 +785,7 @@ class AsyncNeonWebSocketPool:
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
     ) -> None:
-        _validate_websocket_auth_token(auth_token)
+        _warn_ignored_websocket_auth_token(auth_token)
 
         if max_size < 1:
             raise NeonConfigurationError("WebSocket pool max_size must be >= 1.")
@@ -763,7 +793,7 @@ class AsyncNeonWebSocketPool:
         self._connection_string = connection_string
         self._max_size = max_size
         self._http_client = http_client
-        self._auth_token = auth_token
+        self._auth_token = None
         self._timeout = timeout
         self._ws_proxy = ws_proxy
         self._use_secure_websocket = use_secure_websocket
