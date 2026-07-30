@@ -18,8 +18,6 @@ from sqlalchemy.engine.result import IteratorResult, SimpleResultMetaData
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.sql import ClauseElement
 
-from sqlalchemy_neon.neon_http_client import IsolationLevel
-
 from .neon_http_client import (
     AsyncNeonHTTPClient,
     AsyncNeonWebSocketPool,
@@ -438,15 +436,7 @@ class NeonNativeAsyncEngine:
     ) -> list[NativeAsyncResult]:
         queries = [compile_sql(statement, params) for statement, params in statements]
 
-        options = (
-            options
-            if options is not None
-            else TransactionOptions(
-                read_only=True,
-                isolation_level=IsolationLevel.SERIALIZABLE,
-                deferrable=True,
-            )
-        )
+        options = options if options is not None else TransactionOptions()
         raw_results = await self._client.transaction(queries, options=options)
         return [
             NativeAsyncResult(item, statement=statement)

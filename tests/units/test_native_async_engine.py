@@ -15,7 +15,11 @@ from sqlalchemy_neon.native_async_engine import (
     create_neon_native_async_engine,
     create_neon_ws_engine,
 )
-from sqlalchemy_neon.neon_http_client import QueryResult, TransactionOptions
+from sqlalchemy_neon.neon_http_client import (
+    IsolationLevel,
+    QueryResult,
+    TransactionOptions,
+)
 from sqlalchemy_neon.types import PostgresOID
 from testsupport.models import User, Post, Comment
 
@@ -194,6 +198,81 @@ async def test_native_engine_transaction_forwards_compiled_statements(
     )
 
     assert [item.scalar_one() for item in results] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_native_engine_transaction_defaults_allow_writes(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        def __init__(self):
+            self.transaction_calls = []
+
+        async def transaction(self, queries, options=None):
+            self.transaction_calls.append((queries, options))
+            return [
+                QueryResult(rows=[], fields=[], row_count=1, command=command)
+                for command in ("INSERT", "UPDATE", "DELETE")
+            ]
+
+        async def close(self):
+            return None
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    await engine.transaction(
+        [
+            ("INSERT INTO users (name) VALUES ($1)", ["alice"]),
+            ("UPDATE users SET name = $1 WHERE id = $2", ["bob", 1]),
+            ("DELETE FROM users WHERE id = $1", [1]),
+        ]
+    )
+
+    queries, options = fake.transaction_calls[0]
+    assert len(queries) == 3
+    assert options.isolation_level is IsolationLevel.READ_COMMITTED
+    assert options.read_only is False
+    assert options.deferrable is False
+
+
+@pytest.mark.asyncio
+async def test_native_engine_transaction_preserves_explicit_read_only_options(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        def __init__(self):
+            self.transaction_calls = []
+
+        async def transaction(self, queries, options=None):
+            self.transaction_calls.append((queries, options))
+            return [
+                QueryResult(
+                    rows=[{"v": 1}],
+                    fields=[{"name": "v"}],
+                    row_count=1,
+                    command="SELECT",
+                )
+            ]
+
+        async def close(self):
+            return None
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+    options = TransactionOptions(
+        isolation_level=IsolationLevel.SERIALIZABLE,
+        read_only=True,
+        deferrable=True,
+    )
+
+    results = await engine.transaction([("SELECT 1 AS v", None)], options=options)
+
+    assert results[0].scalar_one() == 1
+    _, forwarded_options = fake.transaction_calls[0]
+    assert forwarded_options is options
 
 
 @pytest.mark.asyncio
