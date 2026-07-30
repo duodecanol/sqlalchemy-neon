@@ -7,7 +7,7 @@ All values are transmitted as text over HTTP, with OIDs for type identification.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from psycopg.adapt import PyFormat, Transformer
 from psycopg.postgres import register_default_adapters, register_default_types, types
@@ -83,6 +83,9 @@ class TypeConverter:
     def pg_to_python(self, value: str | None, oid: int) -> Any:
         """Convert a PostgreSQL text value to Python using the OID.
 
+        Unknown OIDs preserve their raw text value. Malformed values for known
+        OIDs raise NeonTypeError without including the value in the error.
+
         Args:
             value: Text value from PostgreSQL response, or None for NULL.
             oid: PostgreSQL OID (dataTypeID) for type identification.
@@ -91,22 +94,22 @@ class TypeConverter:
             Converted Python value.
 
         Raises:
-            NeonTypeError: If the value cannot be converted.
+            NeonTypeError: If a known PostgreSQL type cannot convert the value.
         """
         if value is None:
             return None
 
-        try:
-            # Get the loader for this OID
-            loader = self._transformer.get_loader(oid, Format.TEXT)
-
-            return loader.load(value.encode())
-
-        except Exception as e:
-            raise
-            # For unknown types, return the raw string value
-            # This is safer than failing completely
+        type_info = types.get(oid)
+        if type_info is None:
             return value
+
+        try:
+            loader = self._transformer.get_loader(oid, Format.TEXT)
+            return loader.load(value.encode())
+        except Exception:
+            raise NeonTypeError(
+                f"Failed to convert PostgreSQL value for OID {oid} ({type_info.name})"
+            ) from None
 
     def convert_params(
         self, params: Sequence[Any] | tuple[Any, ...] | None

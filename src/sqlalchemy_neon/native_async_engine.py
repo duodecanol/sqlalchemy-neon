@@ -175,10 +175,7 @@ def _normalize_raw_rows(raw: QueryResult) -> tuple[list[str], list[tuple[Any, ..
                     and isinstance(value, str)
                     and isinstance(oid, int)
                 ):
-                    try:
-                        value = _TYPE_CONVERTER.pg_to_python(value, oid)
-                    except Exception:
-                        pass
+                    value = _TYPE_CONVERTER.pg_to_python(value, oid)
                 converted.append(value)
             rows.append(tuple(converted))
         elif isinstance(row, (list, tuple)):
@@ -190,10 +187,7 @@ def _normalize_raw_rows(raw: QueryResult) -> tuple[list[str], list[tuple[Any, ..
                     and isinstance(value, str)
                     and isinstance(oid, int)
                 ):
-                    try:
-                        value = _TYPE_CONVERTER.pg_to_python(value, oid)
-                    except Exception:
-                        pass
+                    value = _TYPE_CONVERTER.pg_to_python(value, oid)
                 converted.append(value)
             rows.append(tuple(converted))
         else:

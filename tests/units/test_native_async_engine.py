@@ -7,6 +7,8 @@ from uuid import UUID
 import sqlalchemy as sa
 from sqlalchemy import orm
 import pytest
+from sqlalchemy_neon.errors import NeonTypeError
+
 
 from sqlalchemy_neon.native_async_engine import (
     NeonNativeAsyncEngine,
@@ -74,6 +76,53 @@ async def test_native_engine_execute_forwards_to_client(mock_connection_string: 
     assert fake.calls
     assert fake.calls[0][0] == "select $1 as v"
     assert fake.calls[0][1] == [1]
+
+
+@pytest.mark.asyncio
+async def test_native_engine_preserves_unknown_oid_value(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        async def query(self, sql, params, options=None):
+            return QueryResult(
+                rows=[{"value": "opaque-server-value"}],
+                fields=[{"name": "value", "dataTypeID": 999999}],
+                row_count=1,
+                command="SELECT",
+            )
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    engine._client = FakeClient()
+
+    result = await engine.execute("SELECT value")
+
+    assert result.scalar_one() == "opaque-server-value"
+
+
+@pytest.mark.asyncio
+async def test_native_engine_raises_safe_error_for_malformed_known_oid(
+    mock_connection_string: str,
+):
+    malformed_value = "malformed-value-that-must-not-leak"
+
+    class FakeClient:
+        async def query(self, sql, params, options=None):
+            return QueryResult(
+                rows=[{"value": malformed_value}],
+                fields=[{"name": "value", "dataTypeID": PostgresOID.INT4}],
+                row_count=1,
+                command="SELECT",
+            )
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    engine._client = FakeClient()
+
+    with pytest.raises(NeonTypeError) as exc_info:
+        await engine.execute("SELECT value")
+
+    error = str(exc_info.value)
+    assert "OID 23" in error
+    assert malformed_value not in error
 
 
 def test_native_engine_rejects_unknown_transport(mock_connection_string: str):
