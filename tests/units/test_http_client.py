@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import aiohttp
+from aiohttp.test_utils import TestServer
 import pytest
 
 from sqlalchemy_neon.neon_http_client import (
@@ -23,6 +24,7 @@ from sqlalchemy_neon.errors import (
     NeonConfigurationError,
     NeonQueryError,
     NeonTypeError,
+    NeonConnectionError,
 )
 from sqlalchemy_neon.pg_protocol import (
     PGQueryResult,
@@ -374,6 +376,119 @@ async def test_fetch_function_injection_is_used():
     assert result.command == "SELECT"
     assert result.rows[0]["v"] == 1
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_timeout_is_connection_error_without_sensitive_context():
+    async def delayed_response(_: aiohttp.web.Request) -> aiohttp.web.Response:
+        await asyncio.sleep(0.1)
+        return aiohttp.web.json_response({})
+
+    app = aiohttp.web.Application()
+    app.router.add_post("/sql", delayed_response)
+    server = TestServer(app)
+    await server.start_server()
+    client = AsyncNeonHTTPClient(
+        "postgresql://user:connection-password@host.neon.tech/db",
+        fetch_endpoint=str(server.make_url("/sql")),
+        timeout=0.01,
+    )
+    sensitive_values = (
+        "connection-password",
+        "query-payload-secret",
+        "bind-payload-secret",
+    )
+
+    try:
+        with pytest.raises(NeonConnectionError) as error:
+            await client.query(
+                "SELECT 'query-payload-secret'",
+                ("bind-payload-secret",),
+            )
+    finally:
+        await client.close()
+        await server.close()
+
+    assert str(error.value) == "Request timed out."
+    assert all(value not in str(error.value) for value in sensitive_values)
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_request_cancellation_is_not_wrapped():
+    started = asyncio.Event()
+    never_finishes = asyncio.Event()
+
+    async def pending_response(_: aiohttp.web.Request) -> aiohttp.web.Response:
+        started.set()
+        await never_finishes.wait()
+        return aiohttp.web.json_response({})
+
+    app = aiohttp.web.Application()
+    app.router.add_post("/sql", pending_response)
+    server = TestServer(app)
+    await server.start_server()
+    client = AsyncNeonHTTPClient(
+        "postgresql://user:pass@host.neon.tech/db",
+        fetch_endpoint=str(server.make_url("/sql")),
+    )
+    request = asyncio.create_task(client.query("SELECT 1"))
+
+    try:
+        await started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    finally:
+        never_finishes.set()
+        await client.close()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_custom_fetch_timeout_is_connection_error_without_sensitive_context():
+    async def timeout_fetch(url: str, body: str, headers: dict[str, str]):
+        raise asyncio.TimeoutError(f"{url} {body} {headers}")
+
+    client = AsyncNeonHTTPClient(
+        "postgresql://user:connection-password@host.neon.tech/db",
+        fetch_function=timeout_fetch,
+    )
+    sensitive_values = (
+        "connection-password",
+        "query-payload-secret",
+        "bind-payload-secret",
+    )
+
+    with pytest.raises(NeonConnectionError) as error:
+        await client.query(
+            "SELECT 'query-payload-secret'",
+            ("bind-payload-secret",),
+        )
+
+    assert str(error.value) == "Request timed out."
+    assert all(value not in str(error.value) for value in sensitive_values)
+
+
+@pytest.mark.asyncio
+async def test_custom_fetch_cancellation_is_not_wrapped():
+    started = asyncio.Event()
+    never_finishes = asyncio.Event()
+
+    async def cancelled_fetch(url: str, body: str, headers: dict[str, str]):
+        started.set()
+        await never_finishes.wait()
+        return 200, "{}"
+
+    client = AsyncNeonHTTPClient(
+        "postgresql://user:pass@host.neon.tech/db",
+        fetch_function=cancelled_fetch,
+    )
+    request = asyncio.create_task(client.query("SELECT 1"))
+    await started.wait()
+    request.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await request
 
 
 
