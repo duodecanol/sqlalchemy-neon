@@ -1,4 +1,4 @@
-name: Tests
+name: Offline checks
 
 on:
   pull_request:
@@ -9,6 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    name: Package, lint, and type checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build package
+        run: uv build
+      - name: Run production lint
+        run: uv run ruff check src
+      - name: Run compatibility type check
+        run: uv run --with mypy mypy src/sqlalchemy_neon/sqlalchemy_compat.py
+
   unit:
     name: Python ${{ matrix.python-version }} / SQLAlchemy ${{ matrix.sqlalchemy-version }}
     runs-on: ubuntu-latest
