@@ -45,6 +45,22 @@ async def main():
 
     await engine.dispose()
 ```
+Single ORM column or expression selections remain positional scalar results.
+
+### Native ORM result contract
+
+The native engine hydrates one bare mapped entity per statement:
+
+```python
+result = await engine.execute(sa.select(User))
+user = result.scalar_one()
+```
+
+Multi-entity statements such as `sa.select(User, Post)` and entity-plus-column
+statements such as `sa.select(User, Post.title)` raise `NotSupportedError` before
+execution. Select Core columns explicitly or issue separate queries when a
+multi-value result is required. Object-form responses with duplicate field names
+are also rejected instead of being normalized into potentially incorrect values.
 
 ## Connection String Format
 
