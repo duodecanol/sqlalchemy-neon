@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import sqlalchemy as sa
 from sqlalchemy import orm
 import pytest
-from sqlalchemy_neon.errors import NeonTypeError
+from sqlalchemy_neon.errors import NeonTypeError, NotSupportedError
 
 
 from sqlalchemy_neon.native_async_engine import (
@@ -728,6 +728,113 @@ def test_native_result_maps_single_orm_entity():
     assert isinstance(user.uuid, UUID)
     assert isinstance(user.birth_date, date)
     assert isinstance(user.created_at, datetime)
+
+
+@pytest.mark.asyncio
+async def test_native_engine_rejects_unsupported_orm_result_shapes(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        async def query(self, sql, params, options=None):
+            raise AssertionError("unsupported ORM result must be rejected first")
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    engine._client = FakeClient()
+
+    for statement in (sa.select(User, Post), sa.select(User, Post.title)):
+        with pytest.raises(
+            NotSupportedError, match="one bare mapped entity per statement"
+        ):
+            await engine.execute(statement)
+
+
+def test_native_result_rejects_duplicate_object_field_names():
+    raw = QueryResult(
+        rows=[{"id": 1}],
+        fields=[{"name": "id"}, {"name": "id"}],
+        row_count=1,
+        command="SELECT",
+    )
+
+    with pytest.raises(
+        NotSupportedError, match="duplicate field names require array-form rows"
+    ):
+        NativeAsyncResult(raw)
+
+
+@pytest.mark.asyncio
+async def test_native_engine_preserves_single_orm_column_result(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        async def query(self, sql, params, options=None):
+            return QueryResult(
+                rows=[{"id": 7}],
+                fields=[{"name": "id", "dataTypeID": PostgresOID.INT4}],
+                row_count=1,
+                command="SELECT",
+            )
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    engine._client = FakeClient()
+
+    result = await engine.execute(sa.select(User.id))
+
+    assert result.scalar_one() == 7
+
+
+@pytest.mark.asyncio
+async def test_native_engine_preserves_core_multi_column_result(
+    mock_connection_string: str,
+):
+    rows = sa.table(
+        "core_rows",
+        sa.column("left_value", sa.Integer),
+        sa.column("right_value", sa.Integer),
+    )
+
+    class FakeClient:
+        async def query(self, sql, params, options=None):
+            return QueryResult(
+                rows=[{"left_value": 1, "right_value": 2}],
+                fields=[
+                    {"name": "left_value", "dataTypeID": PostgresOID.INT4},
+                    {"name": "right_value", "dataTypeID": PostgresOID.INT4},
+                ],
+                row_count=1,
+                command="SELECT",
+            )
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    engine._client = FakeClient()
+
+    result = await engine.execute(sa.select(rows.c.left_value, rows.c.right_value))
+
+    assert result.one() == (1, 2)
+
+
+@pytest.mark.asyncio
+async def test_native_engine_preserves_multiple_orm_column_result(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        async def query(self, sql, params, options=None):
+            return QueryResult(
+                rows=[{"id": 7, "username": "alice"}],
+                fields=[
+                    {"name": "id", "dataTypeID": PostgresOID.INT4},
+                    {"name": "username", "dataTypeID": PostgresOID.VARCHAR},
+                ],
+                row_count=1,
+                command="SELECT",
+            )
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    engine._client = FakeClient()
+
+    result = await engine.execute(sa.select(User.id, User.username))
+
+    assert result.one() == (7, "alice")
 
 
 @pytest.mark.asyncio

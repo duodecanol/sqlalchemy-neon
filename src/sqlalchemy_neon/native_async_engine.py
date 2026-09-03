@@ -25,6 +25,7 @@ from .neon_http_client import (
     QueryResult,
     TransactionOptions,
 )
+from .errors import NotSupportedError
 from .types import TypeConverter
 
 _PYFORMAT_TOKEN = re.compile(r"%\(([^)]+)\)s")
@@ -264,6 +265,10 @@ class NativeAsyncResult:
 
 def _normalize_raw_rows(raw: QueryResult) -> tuple[list[str], list[tuple[Any, ...]]]:
     keys = [field.get("name", "") for field in raw.fields]
+    if len(keys) != len(set(keys)) and any(isinstance(row, dict) for row in raw.rows):
+        raise NotSupportedError(
+            "Results with duplicate field names require array-form rows."
+        )
     oid_by_key = {
         field.get("name", ""): field.get("dataTypeID") for field in raw.fields
     }
@@ -323,6 +328,41 @@ def _extract_single_entity(statement: ClauseElement | None) -> tuple[str, Any] |
     if not hasattr(mapper, "column_attrs"):
         return None
     return desc.get("name") or entity.__name__, mapper
+
+
+def _validate_orm_result_shape(statement: ClauseElement) -> None:
+    descriptions = getattr(statement, "column_descriptions", None)
+    if not descriptions:
+        return
+
+    mapped_descriptions = []
+    for description in descriptions:
+        entity = description.get("entity")
+        if entity is None:
+            continue
+        try:
+            mapper = sa_inspect(entity)
+        except Exception:
+            continue
+        if hasattr(mapper, "column_attrs"):
+            mapped_descriptions.append(description)
+
+    bare_entity_descriptions = [
+        description
+        for description in mapped_descriptions
+        if description.get("entity") is description.get("expr")
+    ]
+    if not bare_entity_descriptions:
+        return
+
+    if len(descriptions) == 1:
+        return
+
+    raise NotSupportedError(
+        "Native ORM results support one bare mapped entity per statement; "
+        "multi-entity and entity-plus-column selections are unsupported. "
+        "Select Core columns explicitly or issue separate queries."
+    )
 
 
 def _row_to_entity(
@@ -495,6 +535,8 @@ class NeonNativeAsyncEngine:
     ) -> NativeAsyncResult:
         if isinstance(statement, (sa.sql.dml.Insert, sa.sql.dml.Update)):
             statement, parameters = _apply_python_dml_defaults(statement, parameters)
+        if isinstance(statement, ClauseElement):
+            _validate_orm_result_shape(statement)
 
         sql, params = compile_sql(statement, parameters)
         raw = await self._client.query(sql, params, options=options)
