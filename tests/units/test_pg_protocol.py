@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import struct
-
 import pytest
+
+import sqlalchemy_neon.pg_protocol as pg_protocol
 
 from sqlalchemy_neon.errors import (
     NeonAuthenticationError,
@@ -475,6 +477,54 @@ class TestBufferedReader:
         reader = _BufferedReader(recv)
         with pytest.raises(NeonConnectionError, match="Connection closed"):
             await reader.read_exact(1)
+
+    @pytest.mark.asyncio
+    async def test_read_message_timeout_covers_partial_payload(self):
+        calls = 0
+
+        async def recv():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return bytes([READY_MSG]) + struct.pack("!I", 8)
+            await asyncio.sleep(1)
+            return b""
+
+        reader = _BufferedReader(recv, read_timeout=0.01)
+        with pytest.raises(NeonConnectionError, match="read timed out"):
+            await reader.read_message()
+        assert calls == 2
+
+    @pytest.mark.asyncio
+    async def test_read_message_accepts_maximum_frame(self, monkeypatch):
+        monkeypatch.setattr(pg_protocol, "MAX_MESSAGE_SIZE", 8)
+        raw = _backend_msg(READY_MSG, b"abcd")
+
+        async def recv():
+            return raw
+
+        reader = _BufferedReader(recv)
+        msg_type, payload = await reader.read_message()
+        assert msg_type == READY_MSG
+        assert payload == b"abcd"
+
+    @pytest.mark.asyncio
+    async def test_read_message_rejects_oversized_frame_before_payload_read(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(pg_protocol, "MAX_MESSAGE_SIZE", 8)
+        calls = 0
+        raw = bytes([READY_MSG]) + struct.pack("!I", 9)
+
+        async def recv():
+            nonlocal calls
+            calls += 1
+            return raw
+
+        reader = _BufferedReader(recv)
+        with pytest.raises(NeonConnectionError, match="exceeds maximum"):
+            await reader.read_message()
+        assert calls == 1
 
 
 # ===========================================================================

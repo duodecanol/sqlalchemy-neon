@@ -25,6 +25,7 @@ from .errors import (
     NeonTransactionError,
 )
 from .pg_protocol import (
+    MAX_MESSAGE_SIZE,
     PGProtocol,
     PGQueryResult,
     _PipelineAuthenticationRequired,
@@ -47,6 +48,13 @@ _DRIVER_URL_PARAMETERS = frozenset(
     }
 )
 
+
+def _protocol_read_timeout(
+    timeout: float | aiohttp.ClientTimeout | None,
+) -> float | None:
+    if isinstance(timeout, aiohttp.ClientTimeout):
+        return timeout.total if timeout.total is not None else timeout.sock_read
+    return float(timeout) if timeout is not None else None
 
 
 class IsolationLevel(Enum):
@@ -486,7 +494,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             self._ws = await client.ws_connect(
                 self._ws_url,
                 heartbeat=self._heartbeat,
-                max_msg_size=0,
+                max_msg_size=MAX_MESSAGE_SIZE + 1,
             )
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise NeonConnectionError(f"WebSocket connect error: {e}") from e
@@ -514,6 +522,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             send_fn,
             recv_fn,
             allow_insecure_password_auth=self._ws_url.startswith("wss://"),
+            read_timeout=_protocol_read_timeout(self._timeout),
         )
         return self._protocol
 

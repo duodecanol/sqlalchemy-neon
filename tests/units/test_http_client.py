@@ -27,6 +27,7 @@ from sqlalchemy_neon.errors import (
     NeonConnectionError,
 )
 from sqlalchemy_neon.pg_protocol import (
+    MAX_MESSAGE_SIZE,
     PGQueryResult,
     _PipelineAuthenticationRequired,
 )
@@ -502,7 +503,11 @@ async def test_websocket_connection_does_not_require_logfire(monkeypatch):
             self.sent.append(data)
 
     class FakeClient:
+        def __init__(self):
+            self.kwargs = {}
+
         async def ws_connect(self, *args, **kwargs):
+            self.kwargs = kwargs
             return websocket
 
     async def close_connection() -> None:
@@ -514,7 +519,8 @@ async def test_websocket_connection_does_not_require_logfire(monkeypatch):
     websocket = FakeWebSocket()
     fake_client = FakeClient()
     client = AsyncNeonWebSocketClient(
-        "postgresql://user:pass@host.neon.tech/db"
+        "postgresql://user:pass@host.neon.tech/db",
+        timeout=0.25,
     )
     monkeypatch.setitem(sys.modules, "logfire", None)
     monkeypatch.setattr(client, "_close_connection", close_connection)
@@ -524,6 +530,8 @@ async def test_websocket_connection_does_not_require_logfire(monkeypatch):
 
     await protocol._send(b"outbound-frame")
     assert websocket.sent == [b"outbound-frame"]
+    assert fake_client.kwargs["max_msg_size"] == MAX_MESSAGE_SIZE + 1
+    assert protocol._reader._read_timeout == 0.25
 
 
 @pytest.mark.asyncio
