@@ -32,6 +32,9 @@ _PYFORMAT_TOKEN = re.compile(r"%\(([^)]+)\)s")
 _TYPE_CONVERTER = TypeConverter()
 _PgDialect = postgresql.psycopg.PGDialect_psycopg
 _NO_DEFAULT = object()
+_SUPPORTED_RELATIONSHIP_STRATEGIES = frozenset(
+    {"selectin", "subquery", "joined", "noload"}
+)
 
 
 def _coerce_param_mapping(
@@ -365,6 +368,24 @@ def _validate_orm_result_shape(statement: ClauseElement) -> None:
     )
 
 
+def _identity_tuple(instance: Any, mapper: Any) -> tuple[Any, ...]:
+    return tuple(getattr(instance, column.key, None) for column in mapper.primary_key)
+
+
+def _strip_joinedload_options(statement: ClauseElement) -> ClauseElement:
+    with_options = getattr(statement, "_with_options", ())
+    for load_opt in with_options:
+        for context in getattr(load_opt, "context", ()):
+            if any(
+                key == "lazy" and value == "joined"
+                for key, value in getattr(context, "strategy", ())
+            ):
+                stripped = statement._generate()
+                stripped._with_options = ()
+                return stripped
+    return statement
+
+
 def _row_to_entity(
     mapper: Any,
     row: Mapping[str, Any],
@@ -537,8 +558,13 @@ class NeonNativeAsyncEngine:
             statement, parameters = _apply_python_dml_defaults(statement, parameters)
         if isinstance(statement, ClauseElement):
             _validate_orm_result_shape(statement)
-
-        sql, params = compile_sql(statement, parameters)
+            self._extract_load_plans(statement)
+        execution_statement = (
+            _strip_joinedload_options(statement)
+            if isinstance(statement, ClauseElement)
+            else statement
+        )
+        sql, params = compile_sql(execution_statement, parameters)
         raw = await self._client.query(sql, params, options=options)
 
         entity_info = _extract_single_entity(
@@ -744,20 +770,27 @@ class NeonNativeAsyncEngine:
                         lazy_strategy = value
                         break
                 strategies.append(lazy_strategy)
+                if lazy_strategy not in _SUPPORTED_RELATIONSHIP_STRATEGIES:
+                    raise NotSupportedError(
+                        f"Loader strategy '{lazy_strategy}' is not supported."
+                    )
 
             while len(strategies) < len(relationships):
                 strategies.append("selectin")
-
             plans.append({"relationships": relationships, "strategies": strategies})
 
         return plans
 
     def _select_strategy(self, strategies: Sequence[str]) -> str:
+        if "noload" in strategies:
+            return "noload"
         if "joined" in strategies:
             return "joined"
         if "subquery" in strategies:
             return "subquery"
-        return "selectin"
+        if "selectin" in strategies:
+            return "selectin"
+        raise NotSupportedError("No supported relationship loader strategy found.")
 
     async def _load_relationship_batch(
         self,
@@ -766,47 +799,77 @@ class NeonNativeAsyncEngine:
         *,
         strategy: str,
         options: QueryOptions | None = None,
-    ) -> tuple[dict[Any, list[Any]], list[Any]]:
+    ) -> tuple[dict[tuple[Any, ...], list[Any]], list[Any]]:
         if not parents:
             return {}, []
 
         parent_cls = rel.parent.class_
-        parent_pk_col = list(rel.parent.primary_key)[0]
+        parent_pk_cols = list(rel.parent.primary_key)
         target_mapper = rel.mapper
-        target_cols = [c for c in target_mapper.columns]
-        target_pk_cols = list(target_mapper.primary_key)
+        target_cols = list(target_mapper.columns)
 
-        parent_ids: list[Any] = []
-        seen_parent_ids: set[Any] = set()
+        parent_ids: list[tuple[Any, ...]] = []
+        seen_parent_ids: set[tuple[Any, ...]] = set()
         for parent in parents:
-            pid = getattr(parent, parent_pk_col.key)
-            if pid not in seen_parent_ids:
-                seen_parent_ids.add(pid)
-                parent_ids.append(pid)
+            parent_id = _identity_tuple(parent, rel.parent)
+            if parent_id not in seen_parent_ids:
+                seen_parent_ids.add(parent_id)
+                parent_ids.append(parent_id)
 
         if not parent_ids:
             return {}, []
 
-        parent_id_col = parent_pk_col.label("__parent_identity")
+        parent_identity_names = (
+            ["__parent_identity"]
+            if len(parent_pk_cols) == 1
+            else [f"__parent_identity_{index}" for index in range(len(parent_pk_cols))]
+        )
+        parent_identity_labels = [
+            column.label(name)
+            for column, name in zip(parent_pk_cols, parent_identity_names)
+        ]
+        identity_criteria = sa.or_(
+            *(
+                sa.and_(
+                    *(
+                        column == value
+                        for column, value in zip(parent_pk_cols, parent_id)
+                    )
+                )
+                for parent_id in parent_ids
+            )
+        )
 
         if strategy == "subquery":
-            ids_subq = (
-                sa.select(parent_pk_col.label("__pid"))
-                .where(parent_pk_col.in_(parent_ids))
-                .subquery()
+            subquery_names = (
+                ["__pid"]
+                if len(parent_pk_cols) == 1
+                else [f"__parent_id_{index}" for index in range(len(parent_pk_cols))]
             )
+            subquery_labels = [
+                column.label(name)
+                for column, name in zip(parent_pk_cols, subquery_names)
+            ]
+            ids_subq = sa.select(*subquery_labels).where(identity_criteria).subquery()
+            join_conditions = [
+                column == ids_subq.c[name]
+                for column, name in zip(parent_pk_cols, subquery_names)
+            ]
             stmt = (
-                sa.select(parent_id_col, *target_cols)
+                sa.select(*parent_identity_labels, *target_cols)
                 .select_from(ids_subq)
-                .join(parent_cls, parent_pk_col == ids_subq.c["__pid"])
+                .join(parent_cls, sa.and_(*join_conditions))
                 .join(getattr(parent_cls, rel.key))
             )
         else:
+            # ``joinedload`` is intentionally a separate SELECT with the same
+            # parent filtering as ``selectinload`` until true join hydration
+            # is implemented.
             stmt = (
-                sa.select(parent_id_col, *target_cols)
+                sa.select(*parent_identity_labels, *target_cols)
                 .select_from(parent_cls)
                 .join(getattr(parent_cls, rel.key))
-                .where(parent_pk_col.in_(parent_ids))
+                .where(identity_criteria)
             )
 
         sql, params = compile_sql(stmt)
@@ -815,21 +878,26 @@ class NeonNativeAsyncEngine:
         row_maps = [dict(zip(keys, row)) for row in rows]
         dialect = _PgDialect()
 
-        by_parent: dict[Any, list[Any]] = {pid: [] for pid in parent_ids}
-        per_parent_seen: dict[Any, set[tuple[Any, ...]]] = {
-            pid: set() for pid in parent_ids
+        by_parent: dict[tuple[Any, ...], list[Any]] = {
+            parent_id: [] for parent_id in parent_ids
         }
+        per_parent_seen: dict[tuple[Any, ...], set[tuple[Any, ...]]] = {
+            parent_id: set() for parent_id in parent_ids
+        }
+        parent_identity_keys = parent_identity_names
 
         for row_map in row_maps:
-            pid = row_map.get("__parent_identity")
-            if pid is None:
+            parent_id = tuple(row_map.get(key) for key in parent_identity_keys)
+            if any(value is None for value in parent_id):
+                continue
+            if parent_id not in by_parent:
                 continue
             entity = _row_to_entity(target_mapper, row_map, dialect=dialect)
-            child_identity = tuple(getattr(entity, c.key) for c in target_pk_cols)
-            if child_identity in per_parent_seen[pid]:
+            child_identity = _identity_tuple(entity, target_mapper)
+            if child_identity in per_parent_seen[parent_id]:
                 continue
-            per_parent_seen[pid].add(child_identity)
-            by_parent[pid].append(entity)
+            per_parent_seen[parent_id].add(child_identity)
+            by_parent[parent_id].append(entity)
 
         loaded_children: list[Any] = []
         for children in by_parent.values():
@@ -861,6 +929,11 @@ class NeonNativeAsyncEngine:
                     for entry_plan, entry_idx in entries
                 ]
             )
+            if strategy == "noload":
+                for parent in parents:
+                    setattr(parent, rel.key, [] if rel.uselist else None)
+                return
+
             by_parent, loaded_children = await self._load_relationship_batch(
                 parents,
                 rel,
@@ -868,10 +941,9 @@ class NeonNativeAsyncEngine:
                 options=options,
             )
 
-            parent_pk_key = list(rel.parent.primary_key)[0].key
             for parent in parents:
-                pid = getattr(parent, parent_pk_key)
-                children = by_parent.get(pid, [])
+                parent_id = _identity_tuple(parent, rel.parent)
+                children = by_parent.get(parent_id, [])
                 if rel.uselist:
                     setattr(parent, rel.key, children)
                 else:
