@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Python ${{ matrix.python-version }} / SQLAlchemy ${{ matrix.sqlalchemy-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+        sqlalchemy-version: ["2.0.0", "2.0.46"]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Run unit tests
+        run: >-
+          uv run --group dev
+          --with "sqlalchemy[asyncio]==${{ matrix.sqlalchemy-version }}"
+          pytest tests/units -q

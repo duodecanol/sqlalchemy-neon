@@ -22,7 +22,7 @@ classifiers = [
 keywords = ["sqlalchemy", "neon", "postgresql", "serverless", "http", "async"]
 
 dependencies = [
-    "sqlalchemy[asyncio]>=2.0",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
     "psycopg[binary]>=3.2.5",
     "aiohttp>=3.11",
     "rich>=14.3.2",
