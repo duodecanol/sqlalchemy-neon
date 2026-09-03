@@ -20,6 +20,8 @@ jobs:
           enable-cache: true
       - name: Build package
         run: uv build
+      - name: Verify source distribution contents
+        run: uv run python tests/verify_sdist.py
       - name: Run production lint
         run: uv run ruff check src
       - name: Run compatibility type check

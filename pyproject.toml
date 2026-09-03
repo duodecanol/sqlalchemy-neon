@@ -56,7 +56,12 @@ packages = ["src/sqlalchemy_neon"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
+    "/tests",
+    "/testsupport",
+    "/README.md",
+    "/TESTING.md",
     "/LICENSE",
+    "/pyproject.toml",
 ]
 
 [tool.pytest.ini_options]
