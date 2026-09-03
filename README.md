@@ -2,14 +2,21 @@
 
 A native async SQLAlchemy execution layer for Neon serverless PostgreSQL over HTTP.
 
-## Features
+## Scope
 
-- **Serverless HTTP connectivity**: Connect to Neon databases via HTTP instead of traditional TCP
-- **Full SQLAlchemy ORM support**: Use SQLAlchemy's powerful ORM with Neon's serverless PostgreSQL
-- **Native async engine**: Execute SQLAlchemy Core/ORM statements without AsyncEngine sync-proxying
-- **Relationship loading**: Strategy-aware eager loading support for ORM options
-- **Type conversions**: Complete PostgreSQL type support including JSON, UUID, arrays, and more
-- **Batch utilities**: Run concurrent query workloads with helper utilities
+This package is a native async SQLAlchemy statement executor for Neon
+serverless PostgreSQL over HTTP or WebSocket. It is not a SQLAlchemy dialect and
+does not provide `Session` or `AsyncSession` behavior.
+
+- **Native async execution**: Execute SQLAlchemy Core statements directly.
+- **Partial ORM support**: Hydrate one bare mapped entity and supported
+  relationship loader strategies.
+- **HTTP/WebSocket transports**: Use HTTP for request execution or WebSocket for
+  PostgreSQL protocol execution.
+- **Type conversion**: Convert supported PostgreSQL values through psycopg;
+  unknown OIDs remain raw values.
+- **Batch operations**: Execute explicit statement batches through
+  `engine.transaction(...)` and object helpers such as `add_all(...)`.
 
 ## Installation
 
@@ -20,9 +27,9 @@ pip install sqlalchemy-neon
 Or install from source:
 
 ```bash
-git clone https://github.com/yourusername/sqlalchemy-neon-driver.git
-cd sqlalchemy-neon-driver
-pip install -e .
+git clone https://github.com/duodecanol/sqlalchemy-neon.git
+cd sqlalchemy-neon
+python -m pip install -e .
 ```
 
 ## Usage
@@ -120,60 +127,45 @@ ws_engine = create_neon_native_async_engine(
 
 ### Setup Development Environment
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/sqlalchemy-neon-driver.git
-cd sqlalchemy-neon-driver
+The repository uses uv dependency groups. From a clean checkout:
 
-# Sync the runtime package and development toolchain, including Logfire.
+```bash
+git clone https://github.com/duodecanol/sqlalchemy-neon.git
+cd sqlalchemy-neon
 uv sync --group dev
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
 
 ### Development Telemetry (Optional)
 
-Logfire is a development-only dependency. It is neither imported by the driver nor
-declared in the published wheel's runtime dependencies.
-
-Test telemetry is disabled by default. To export safe request-level spans while
-developing, explicitly provide both a Logfire write token and the opt-in flag:
+Logfire is development-only and opt-in. It is not imported by the runtime
+package and is not included in the published wheel's dependencies.
 
 ```bash
 ENABLE_TEST_TELEMETRY=1 LOGFIRE_TOKEN=<write-token> \
   uv run --group dev pytest -o addopts="--logfire" tests/units -q
 ```
 
-This records standard client span metadata only. Request and response headers,
-bodies, PostgreSQL frames, SQL parameters, and query results are never captured
-or exported. Inspect a specific raw payload locally with a debugger; do not send
-it to telemetry.
+Request and response headers, bodies, PostgreSQL frames, SQL parameters, and
+query results are never captured or exported by the test telemetry setup.
 
 ### Running Tests
 
-#### Unit Tests
-
-Run unit tests without requiring a live database:
+Unit tests do not require a database:
 
 ```bash
-uv run --group dev pytest tests/units -q
+ENABLE_TEST_TELEMETRY=0 LOGFIRE_TOKEN= \
+  uv run --group dev pytest tests/units -q
 ```
 
-#### Run All Tests
+The clean-checkout test lane is the unit suite above. Run live integration
+tests separately only after configuring the protected variables in `TESTING.md`.
+
+### Test Coverage (Optional)
 
 ```bash
-# Test suite (no database required)
-uv run --group dev pytest tests/ -v
+uv run --with pytest-cov pytest tests/units -q \
+  --cov=sqlalchemy_neon --cov-report=term-missing
 ```
-
-### Test Coverage
-
-To run tests with coverage:
-
-```bash
-pip install pytest-cov
-pytest tests/ --cov=sqlalchemy_neon --cov-report=html
-```
-
-View the coverage report at `htmlcov/index.html`.
 
 ## Architecture
 
@@ -200,24 +192,18 @@ The native engine compiles SQLAlchemy statements to PostgreSQL SQL + bind parame
 executes them over Neon HTTP, and then maps results back into SQLAlchemy-compatible
 result objects and ORM entities.
 
-## Supported Features
+## Capability Matrix
 
-### ✅ Supported
-
-- All basic SQL operations (SELECT, INSERT, UPDATE, DELETE)
-- Transactions (BEGIN, COMMIT, ROLLBACK)
-- Prepared statements with parameter binding
-- All PostgreSQL data types via psycopg
-- SQLAlchemy ORM (declarative, relationships, etc.)
-- Native async support via `NeonNativeAsyncEngine`
-- Strategy-aware relationship loading for ORM options
-
-### ❌ Not Supported
-
-- Server-side cursors (stateless HTTP)
-- LISTEN/NOTIFY (requires persistent connection)
-- COPY commands (may be added in future)
-- Two-phase commit (XA transactions)
+| Area | Contract |
+| --- | --- |
+| Core statements | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, parameters, and result wrappers are supported. |
+| Native ORM | Partial: one bare mapped entity, object helpers, and supported relationship loaders. |
+| ORM result shapes | Multi-entity and entity-plus-column results raise `NotSupportedError`. |
+| Relationships | `selectinload`, `subqueryload`, `joinedload` (separate-query equivalent), and `noload` are supported. `lazyload` and `raiseload` are rejected. |
+| Transactions | Explicit statement batches through `engine.transaction(...)`; `add`/`add_all`/`delete`/`delete_all` use a write transaction. |
+| Type conversion | Supported PostgreSQL types use psycopg processors; unknown OIDs remain raw values. |
+| Dialect and sessions | No SQLAlchemy dialect registration, `Session`, or `AsyncSession` implementation. |
+| Stateless-server features | Server-side cursors, `LISTEN`/`NOTIFY`, `COPY`, and two-phase commit are unsupported. |
 
 ## Troubleshooting
 
@@ -229,20 +215,18 @@ If you get connection errors, verify:
 2. The database endpoint is accessible
 3. SSL mode is appropriate (usually `require` for Neon)
 
-### Transaction Issues
+### Transaction Scope
 
-Remember that transactions are buffered and sent on commit. If you need immediate execution:
-
-1. Use `autocommit=True` mode
-2. Or call `commit()` after each statement
+The native engine does not expose `Session.commit()`, `Session.rollback()`,
+savepoints, or autocommit mode. Use `engine.transaction(...)` for an explicit
+statement batch and `TransactionOptions` for isolation, read-only, and
+deferrable settings.
 
 ### Type Conversion Errors
 
-The driver uses psycopg's type system. If you encounter type conversion issues:
-
-1. Ensure your Python types match the PostgreSQL column types
-2. Use SQLAlchemy's type annotations for clarity
-3. Check that psycopg supports the PostgreSQL type
+The driver uses psycopg processors for supported PostgreSQL types. Unknown OIDs
+are returned as raw values; malformed values for known types raise a safe
+conversion error.
 
 ## Contributing
 
@@ -270,4 +254,4 @@ This driver builds on:
 
 - [Neon Documentation](https://neon.tech/docs)
 - [SQLAlchemy Documentation](https://docs.sqlalchemy.org/)
-- [GitHub Repository](https://github.com/yourusername/sqlalchemy-neon-driver)
+- [GitHub Repository](https://github.com/duodecanol/sqlalchemy-neon)
