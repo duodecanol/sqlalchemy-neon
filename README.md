@@ -135,6 +135,10 @@ cd sqlalchemy-neon
 uv sync --group dev
 ```
 
+Python 3.10 is the supported minimum. Offline CI verifies the minimum and
+current documented Python versions against the supported SQLAlchemy 2.0.x
+range.
+
 ### Development Telemetry (Optional)
 
 Logfire is development-only and opt-in. It is not imported by the runtime

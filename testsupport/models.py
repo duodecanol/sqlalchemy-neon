@@ -14,10 +14,10 @@ from sqlalchemy import (
     text,
     UUID as SQLAlchemyUUID,
 )
-from datetime import date, datetime, UTC
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import (
@@ -78,7 +78,7 @@ class User(Base):
     full_name: Mapped[Optional[str]] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
     birth_date: Mapped[Optional[date]] = mapped_column(Date)
     profile: Mapped[Optional[dict]] = mapped_column(JSONB)
@@ -105,10 +105,10 @@ class Post(Base):
     published: Mapped[bool] = mapped_column(Boolean, default=False)
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
     updated_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, onupdate=lambda: datetime.now(UTC).replace(tzinfo=None)
+        DateTime, onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
     # Relationships
@@ -134,7 +134,7 @@ class Comment(Base):
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
     # Relationships
@@ -191,7 +191,7 @@ class ComplexData(Base):
     data_bytea: Mapped[Optional[bytes]] = mapped_column(sa.LargeBinary)
     data_text: Mapped[Optional[str]] = mapped_column(sa.Text)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
     def __repr__(self) -> str:
