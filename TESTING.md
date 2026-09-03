@@ -89,7 +89,7 @@ variables below.
 From the repository root:
 
 ```bash
-uv sync --group dev
+uv sync --group dev --extra telemetry
 export NEON_TEST_DATABASE_URL="postgresql://username:password@ep-xyz.us-east-1.aws.neon.tech/neondb_test"
 export NEON_TEST_ALLOWED_DATABASES="neondb_test"
 export NEON_TEST_ALLOW_DESTRUCTIVE=1
