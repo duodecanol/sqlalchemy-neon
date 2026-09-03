@@ -7,6 +7,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
+import psycopg.types.datetime as psycopg_datetime
 from sqlalchemy_neon.errors import NeonTypeError
 
 
@@ -137,6 +138,29 @@ class TestTypeConverter:
         assert "OID 23" in error
         assert "int4" in error
         assert malformed_value not in error
+
+    def test_pg_to_python_interval_uses_postgres_text_style(
+        self, converter: TypeConverter
+    ):
+        value = converter.pg_to_python(
+            "1 year 2 mons 3 days 04:05:06.5", PostgresOID.INTERVAL
+        )
+
+        assert value == datetime.timedelta(days=428, seconds=14706.5)
+
+    def test_pg_to_python_interval_malformed_value_is_safe(
+        self, converter: TypeConverter
+    ):
+        malformed_value = "invalid interval value"
+
+        with pytest.raises(NeonTypeError) as exc_info:
+            converter.pg_to_python(malformed_value, PostgresOID.INTERVAL)
+
+        assert "OID 1186" in str(exc_info.value)
+        assert malformed_value not in str(exc_info.value)
+
+    def test_import_does_not_patch_psycopg_interval_style(self):
+        assert psycopg_datetime._get_intervalstyle(None) == b"unknown"
 
 
 class TestBuildCursorDescription:

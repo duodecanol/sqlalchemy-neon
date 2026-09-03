@@ -7,6 +7,8 @@ All values are transmitted as text over HTTP, with OIDs for type identification.
 
 from __future__ import annotations
 
+import datetime
+import re
 from typing import Any, Sequence
 
 from psycopg.adapt import PyFormat, Transformer
@@ -14,18 +16,41 @@ from psycopg.postgres import register_default_adapters, register_default_types, 
 from psycopg.pq import Format
 from psycopg.types.json import Jsonb
 
-
-# Patch psycopg's interval style detection since we don't have a persistent connection
-# This forces PostgreSQL-style interval format
-try:
-    import psycopg.types.datetime as psycopg_datetime
-
-    psycopg_datetime._get_intervalstyle = lambda _: b"postgres"
-except (ImportError, AttributeError):
-    print("skldfjsdklfj")
-    pass
-
 from .errors import NeonTypeError
+
+
+_POSTGRES_INTERVAL_RE = re.compile(
+    rb"""
+    (?: ([-+]?\d+) \s+ years? \s* )?
+    (?: ([-+]?\d+) \s+ mons? \s* )?
+    (?: ([-+]?\d+) \s+ days? \s* )?
+    (?: ([-+])? (\d+) : (\d+) : (\d+ (?:\.\d+)?))? \s*
+    """,
+    re.VERBOSE,
+)
+
+
+def _parse_postgres_interval(value: str) -> datetime.timedelta:
+    """Parse PostgreSQL ``IntervalStyle=postgres`` text without psycopg globals."""
+    match = _POSTGRES_INTERVAL_RE.fullmatch(value.encode())
+    if not match:
+        raise ValueError("invalid PostgreSQL interval")
+
+    years, months, days_value, sign, hours, minutes, seconds_value = match.groups()
+    days = 0
+    seconds = 0.0
+    if years:
+        days += 365 * int(years)
+    if months:
+        days += 30 * int(months)
+    if days_value:
+        days += int(days_value)
+    if hours:
+        seconds = 3600 * int(hours) + 60 * int(minutes) + float(seconds_value)
+        if sign == b"-":
+            seconds = -seconds
+
+    return datetime.timedelta(days=days, seconds=seconds)
 
 
 class TypeConverter:
@@ -104,6 +129,8 @@ class TypeConverter:
             return value
 
         try:
+            if oid == PostgresOID.INTERVAL:
+                return _parse_postgres_interval(value)
             loader = self._transformer.get_loader(oid, Format.TEXT)
             return loader.load(value.encode())
         except Exception:
