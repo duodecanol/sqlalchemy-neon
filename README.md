@@ -274,3 +274,4 @@ This driver builds on:
 - [Neon Documentation](https://neon.tech/docs)
 - [SQLAlchemy Documentation](https://docs.sqlalchemy.org/)
 - [GitHub Repository](https://github.com/duodecanol/sqlalchemy-neon)
+- [Issue Tracker](https://github.com/duodecanol/sqlalchemy-neon/issues)
