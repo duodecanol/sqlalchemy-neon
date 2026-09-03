@@ -168,8 +168,11 @@ results = await neondb.transaction(
 )
 ```
 
-The native engine does not provide `Session.commit()`, rollback methods,
-savepoints, or autocommit mode.
+`engine.transaction(...)` commits only after every statement succeeds. A
+server error, transport error, or cancellation attempts `ROLLBACK`, quarantines
+the affected transport, and re-raises the original exception. The native
+engine does not provide `Session.commit()`, rollback methods, savepoints, or
+autocommit mode; savepoints are unsupported.
 
 ## Troubleshooting
 
