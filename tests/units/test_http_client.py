@@ -39,12 +39,12 @@ class TestAsyncNeonHTTPClient:
     def test_parse_endpoint_postgresql(self):
         """Test parsing postgresql:// URL."""
         client = AsyncNeonHTTPClient("postgresql://user:pass@host.neon.tech/db")
-        assert client._url == "https://api.neon.tech/sql"
+        assert client._resolve_fetch_url(jwt_auth=False) == "https://api.neon.tech/sql"
 
     def test_parse_endpoint_postgres(self):
         """Test parsing postgres:// URL."""
         client = AsyncNeonHTTPClient("postgres://user:pass@host.neon.tech/db")
-        assert client._url == "https://api.neon.tech/sql"
+        assert client._resolve_fetch_url(jwt_auth=False) == "https://api.neon.tech/sql"
 
     def test_parse_endpoint_invalid_scheme(self):
         """Test invalid scheme raises error."""
@@ -176,7 +176,7 @@ class TestAsyncNeonHTTPClient:
             "postgresql://user:pass@host.neon.tech/db",
             fetch_endpoint="https://proxy.local/sql",
         )
-        assert client._url == "https://proxy.local/sql"
+        assert client._resolve_fetch_url(jwt_auth=False) == "https://proxy.local/sql"
 
     def test_custom_fetch_endpoint_callable(self):
         client = AsyncNeonHTTPClient(
@@ -187,7 +187,7 @@ class TestAsyncNeonHTTPClient:
             auth_token="x",
         )
         assert (
-            client._url
+            client._resolve_fetch_url(jwt_auth=True)
             == "https://edge.local/sql?host=host.neon.tech&port=5444&auth=1"
         )
 
