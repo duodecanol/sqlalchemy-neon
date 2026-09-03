@@ -22,12 +22,12 @@ from sqlalchemy_neon.neon_http_client import (
 from sqlalchemy_neon.errors import (
     NeonAuthenticationError,
     NeonConfigurationError,
+    NeonConnectionError,
+    NeonHTTPError,
     NeonQueryError,
     NeonTypeError,
-    NeonConnectionError,
 )
 from sqlalchemy_neon.pg_protocol import (
-    MAX_MESSAGE_SIZE,
     PGQueryResult,
     _PipelineAuthenticationRequired,
 )
@@ -268,6 +268,30 @@ class TestAsyncNeonWebSocketClient:
         assert client._connection_string.endswith("/db")
 
 
+def test_full_results_option_was_removed():
+    with pytest.raises(TypeError, match="full_results"):
+        QueryOptions(full_results=False)
+    with pytest.raises(TypeError, match="full_results"):
+        TransactionOptions(full_results=False)
+
+def test_size_limits_require_positive_integers():
+    with pytest.raises(NeonConfigurationError, match="max_response_size"):
+        AsyncNeonHTTPClient(
+            "postgresql://user:pass@host.neon.tech/db",
+            max_response_size=0,
+        )
+    with pytest.raises(NeonConfigurationError, match="max_message_size"):
+        AsyncNeonWebSocketClient(
+            "postgresql://user:pass@host.neon.tech/db",
+            max_message_size=0,
+        )
+    with pytest.raises(NeonConfigurationError, match="max_result_size"):
+        AsyncNeonWebSocketClient(
+            "postgresql://user:pass@host.neon.tech/db",
+            max_result_size=0,
+        )
+
+
 class TestTransactionOptions:
     """Tests for TransactionOptions validation."""
 
@@ -408,6 +432,44 @@ async def test_fetch_function_injection_is_used():
     assert result.command == "SELECT"
     assert result.rows[0]["v"] == 1
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_function_response_size_is_bounded():
+    async def oversized_fetch(url: str, body: str, headers: dict[str, str]):
+        return 200, '{"rows":[]}'
+
+    client = AsyncNeonHTTPClient(
+        "postgresql://user:pass@host.neon.tech/db",
+        fetch_function=oversized_fetch,
+        max_response_size=8,
+    )
+
+    with pytest.raises(NeonHTTPError, match="maximum size"):
+        await client.query("select 1")
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_response_size_is_bounded():
+    async def oversized_response(_: aiohttp.web.Request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(text='{"rows":[]}')
+
+    app = aiohttp.web.Application()
+    app.router.add_post("/sql", oversized_response)
+    server = TestServer(app)
+    await server.start_server()
+    client = AsyncNeonHTTPClient(
+        "postgresql://user:pass@host.neon.tech/db",
+        fetch_endpoint=str(server.make_url("/sql")),
+        max_response_size=8,
+    )
+
+    try:
+        with pytest.raises(NeonHTTPError, match="maximum size"):
+            await client.query("select 1")
+    finally:
+        await client.close()
+        await server.close()
 
 
 @pytest.mark.asyncio
@@ -552,6 +614,7 @@ async def test_websocket_connection_does_not_require_logfire(monkeypatch):
     client = AsyncNeonWebSocketClient(
         "postgresql://user:pass@host.neon.tech/db",
         timeout=0.25,
+        max_message_size=128,
     )
     monkeypatch.setitem(sys.modules, "logfire", None)
     monkeypatch.setattr(client, "_close_connection", close_connection)
@@ -561,8 +624,9 @@ async def test_websocket_connection_does_not_require_logfire(monkeypatch):
 
     await protocol._send(b"outbound-frame")
     assert websocket.sent == [b"outbound-frame"]
-    assert fake_client.kwargs["max_msg_size"] == MAX_MESSAGE_SIZE + 1
+    assert fake_client.kwargs["max_msg_size"] == 129
     assert protocol._reader._read_timeout == 0.25
+    assert protocol._reader._max_message_size == 128
 
 
 @pytest.mark.asyncio
