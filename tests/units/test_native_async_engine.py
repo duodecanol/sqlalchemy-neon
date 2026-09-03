@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy import orm
@@ -545,6 +545,86 @@ async def test_native_engine_add_all_uses_single_transaction(
     assert options.read_only is False
     assert users[0].id == 11
     assert users[1].id == 12
+
+
+@pytest.mark.asyncio
+async def test_native_engine_add_preserves_natural_uuid_and_composite_keys(
+    mock_connection_string: str,
+):
+    metadata = sa.MetaData()
+    natural_table = sa.Table(
+        "natural_key_rows",
+        metadata,
+        sa.Column("key", sa.String, primary_key=True),
+        sa.Column("value", sa.String, nullable=False),
+    )
+    uuid_table = sa.Table(
+        "uuid_key_rows",
+        metadata,
+        sa.Column(
+            "id",
+            sa.dialects.postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            default=uuid4,
+        ),
+        sa.Column("value", sa.String, nullable=False),
+    )
+    composite_table = sa.Table(
+        "composite_key_rows",
+        metadata,
+        sa.Column("tenant", sa.String, primary_key=True),
+        sa.Column("key", sa.Integer, primary_key=True),
+        sa.Column("value", sa.String, nullable=False),
+    )
+
+    registry = orm.registry()
+
+    class NaturalKey:
+        def __init__(self, key, value):
+            self.key = key
+            self.value = value
+
+    class UUIDKey:
+        def __init__(self, value):
+            self.value = value
+
+    class CompositeKey:
+        def __init__(self, tenant, key, value):
+            self.tenant = tenant
+            self.key = key
+            self.value = value
+
+    registry.map_imperatively(NaturalKey, natural_table)
+    registry.map_imperatively(UUIDKey, uuid_table)
+    registry.map_imperatively(CompositeKey, composite_table)
+
+    class FakeClient:
+        def __init__(self):
+            self.transaction_calls = []
+
+        async def transaction(self, queries, options=None):
+            self.transaction_calls.append((queries, options))
+            return [
+                QueryResult(rows=[], fields=[], row_count=1, command="INSERT")
+                for _ in queries
+            ]
+
+    natural = NaturalKey("customer-1", "natural")
+    generated_uuid = UUIDKey("uuid")
+    composite = CompositeKey("tenant-1", 7, "composite")
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    await engine.add_all([natural, generated_uuid, composite])
+
+    queries, options = fake.transaction_calls[0]
+    assert len(queries) == 3
+    assert isinstance(options, TransactionOptions)
+    assert queries[0][1] == ["customer-1", "natural"]
+    assert isinstance(generated_uuid.id, UUID)
+    assert generated_uuid.id in queries[1][1]
+    assert queries[2][1] == ["tenant-1", 7, "composite"]
 
 
 @pytest.mark.asyncio
