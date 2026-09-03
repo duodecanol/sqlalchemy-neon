@@ -99,6 +99,111 @@ def compile_sql(
     return _pyformat_to_numeric(str(compiled), mapping)
 
 
+def _resolve_python_default(default: Any) -> Any:
+    if default is None:
+        return _NO_DEFAULT
+
+    if getattr(default, "is_scalar", False):
+        return default.arg
+
+    if getattr(default, "is_callable", False):
+        fn = default.arg
+        try:
+            return fn(None)
+        except TypeError:
+            return fn()
+
+    return _NO_DEFAULT
+
+
+def _apply_python_dml_defaults(
+    statement: sa.sql.dml.Insert | sa.sql.dml.Update,
+    parameters: Mapping[str, Any] | Sequence[Any] | None,
+) -> tuple[
+    sa.sql.dml.Insert | sa.sql.dml.Update,
+    Mapping[str, Any] | Sequence[Any] | None,
+]:
+    if parameters is not None and not isinstance(parameters, Mapping):
+        return statement, parameters
+
+    if isinstance(statement, sa.sql.dml.Insert):
+        multi_values = getattr(statement, "_multi_values", ())
+        if multi_values:
+            rows = multi_values[0]
+            if not all(isinstance(row, Mapping) for row in rows):
+                return statement, parameters
+
+            updated_rows: list[dict[Any, Any]] = []
+            changed = False
+            for row in rows:
+                values = dict(row)
+                explicit_columns = {
+                    key.key if hasattr(key, "key") else key for key in values
+                }
+                for column in statement.table.columns:
+                    if (
+                        column.key in explicit_columns
+                        or column.default is None
+                        or getattr(column.default, "is_clause_element", False)
+                    ):
+                        continue
+                    resolved = _resolve_python_default(column.default)
+                    if resolved is not _NO_DEFAULT:
+                        values[column.key] = resolved
+                        changed = True
+                updated_rows.append(values)
+
+            if changed:
+                returning = getattr(statement, "_returning", ())
+                statement = sa.insert(statement.table).values(updated_rows)
+                if returning:
+                    statement = statement.returning(*returning)
+            return statement, parameters
+
+    statement_values = getattr(statement, "_values", None) or {}
+    explicit_columns = {
+        key.key if hasattr(key, "key") else key for key in statement_values
+    }
+    parameter_keys = set(parameters) if isinstance(parameters, Mapping) else set()
+    defaults: dict[str, Any] = {}
+
+    for column in statement.table.columns:
+        default = (
+            column.default
+            if isinstance(statement, sa.sql.dml.Insert)
+            else column.onupdate
+        )
+        if (
+            default is None
+            or column.key in explicit_columns
+            or column.key in parameter_keys
+            or getattr(default, "is_clause_element", False)
+        ):
+            continue
+
+        resolved = _resolve_python_default(default)
+        if resolved is not _NO_DEFAULT:
+            defaults[column.key] = resolved
+
+    if (
+        isinstance(statement, sa.sql.dml.Insert)
+        and not statement_values
+        and isinstance(parameters, Mapping)
+    ):
+        insert_values = {
+            key.key if hasattr(key, "key") else key: value
+            for key, value in parameters.items()
+            if (key.key if hasattr(key, "key") else key) in statement.table.c
+        }
+        insert_values.update(defaults)
+        if insert_values:
+            return statement.values(insert_values), None
+
+    if defaults:
+        statement = statement.values(defaults)
+    return statement, parameters
+
+
 class NativeAsyncResult:
     """SQLAlchemy-compatible result wrapper for native async execution."""
 
@@ -388,6 +493,9 @@ class NeonNativeAsyncEngine:
         *,
         options: QueryOptions | None = None,
     ) -> NativeAsyncResult:
+        if isinstance(statement, (sa.sql.dml.Insert, sa.sql.dml.Update)):
+            statement, parameters = _apply_python_dml_defaults(statement, parameters)
+
         sql, params = compile_sql(statement, parameters)
         raw = await self._client.query(sql, params, options=options)
 
@@ -539,20 +647,7 @@ class NeonNativeAsyncEngine:
         return insert_stmt, params, table
 
     def _resolve_python_default(self, default: Any) -> Any:
-        if default is None:
-            return _NO_DEFAULT
-
-        if getattr(default, "is_scalar", False):
-            return default.arg
-
-        if getattr(default, "is_callable", False):
-            fn = default.arg
-            try:
-                return fn(None)
-            except TypeError:
-                return fn()
-
-        return _NO_DEFAULT
+        return _resolve_python_default(default)
 
     def _apply_returning_values(
         self, instance: Any, table: Any, result: NativeAsyncResult

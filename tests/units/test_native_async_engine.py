@@ -79,6 +79,179 @@ async def test_native_engine_execute_forwards_to_client(mock_connection_string: 
 
 
 @pytest.mark.asyncio
+async def test_native_engine_execute_applies_core_insert_defaults(
+    mock_connection_string: str,
+):
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "defaulted_rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("required_default", sa.Integer, nullable=False, default=7),
+        sa.Column("nullable_default", sa.String, default="fallback"),
+        sa.Column("callable_default", sa.Integer, default=lambda: 13),
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def query(self, sql, params, options=None):
+            self.calls.append((sql, params, options))
+            return QueryResult(rows=[], fields=[], row_count=1, command="INSERT")
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    await engine.execute(table.insert())
+
+    sql, params, _ = fake.calls[0]
+    assert "required_default" in sql
+    assert params == [7, "fallback", 13]
+
+
+@pytest.mark.asyncio
+async def test_native_engine_execute_preserves_explicit_core_insert_values(
+    mock_connection_string: str,
+):
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "defaulted_rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("value", sa.Integer, default=7),
+        sa.Column("label", sa.String, default="fallback"),
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def query(self, sql, params, options=None):
+            self.calls.append((sql, params, options))
+            return QueryResult(rows=[], fields=[], row_count=1, command="INSERT")
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    await engine.execute(
+        table.insert().values(value=0, label=None),
+    )
+
+    _, params, _ = fake.calls[0]
+    assert params == [0, None]
+
+
+@pytest.mark.asyncio
+async def test_native_engine_execute_preserves_mapping_insert_values(
+    mock_connection_string: str,
+):
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "mapped_rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("name", sa.String, nullable=False),
+        sa.Column("value", sa.Integer, default=7),
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def query(self, sql, params, options=None):
+            self.calls.append((sql, params, options))
+            return QueryResult(rows=[], fields=[], row_count=1, command="INSERT")
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    await engine.execute(table.insert(), {"name": "alice"})
+
+    sql, params, _ = fake.calls[0]
+    assert "name" in sql
+    assert "value" in sql
+    assert params == ["alice", 7]
+
+
+@pytest.mark.asyncio
+async def test_native_engine_execute_applies_multirow_insert_defaults(
+    mock_connection_string: str,
+):
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "multi_defaulted_rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("name", sa.String, nullable=False),
+        sa.Column("value", sa.Integer, default=7),
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def query(self, sql, params, options=None):
+            self.calls.append((sql, params, options))
+            return QueryResult(rows=[], fields=[], row_count=2, command="INSERT")
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    await engine.execute(
+        table.insert().values([{"name": "alice"}, {"name": "bob"}]),
+    )
+
+    sql, params, _ = fake.calls[0]
+    assert sql.count("value") >= 1
+    assert params == ["alice", 7, "bob", 7]
+
+
+@pytest.mark.asyncio
+async def test_native_engine_execute_applies_core_update_onupdate(
+    mock_connection_string: str,
+):
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "audited_rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("value", sa.Integer),
+        sa.Column("updated_marker", sa.Integer, onupdate=lambda: 42),
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def query(self, sql, params, options=None):
+            self.calls.append((sql, params, options))
+            return QueryResult(rows=[], fields=[], row_count=1, command="UPDATE")
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    await engine.execute(
+        table.update().where(table.c.id == 1).values(value=9),
+    )
+
+    _, params, _ = fake.calls[0]
+    assert params == [9, 42, 1]
+
+    await engine.execute(
+        table.update().where(table.c.id == 1).values(value=10, updated_marker=99),
+    )
+
+    _, explicit_params, _ = fake.calls[1]
+    assert explicit_params == [10, 99, 1]
+
+
+@pytest.mark.asyncio
 async def test_native_engine_preserves_unknown_oid_value(
     mock_connection_string: str,
 ):
