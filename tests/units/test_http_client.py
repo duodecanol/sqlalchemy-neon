@@ -343,6 +343,37 @@ class TestAsyncContextManager:
         await mock_client.close()
 
     @pytest.mark.asyncio
+    async def test_internal_session_recreation_preserves_timeout(self):
+        client = AsyncNeonHTTPClient(
+            "postgresql://user:pass@host.neon.tech/db",
+            timeout=12.0,
+        )
+
+        first = await client._ensure_client()
+        assert first.timeout.total == 12.0
+        await first.close()
+
+        second = await client._ensure_client()
+        assert second is not first
+        assert second.timeout.total == 12.0
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_closed_external_session_is_rejected_without_replacement(self):
+        external = aiohttp.ClientSession()
+        await external.close()
+        client = AsyncNeonHTTPClient(
+            "postgresql://user:pass@host.neon.tech/db",
+            http_client=external,
+        )
+
+        with pytest.raises(NeonConfigurationError, match="http_client is closed"):
+            await client._ensure_client()
+        assert client._http_client is external
+        assert external.closed is True
+        await client.close()
+
+    @pytest.mark.asyncio
     async def test_callable_client_factory_is_closed_by_owner(self):
         created: list[aiohttp.ClientSession] = []
 

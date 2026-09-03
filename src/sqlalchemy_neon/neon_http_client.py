@@ -237,6 +237,13 @@ class AsyncNeonHTTPClient:
 
         return headers
 
+    def _client_timeout(self) -> aiohttp.ClientTimeout | None:
+        if isinstance(self._timeout, aiohttp.ClientTimeout):
+            return self._timeout
+        if isinstance(self._timeout, (int, float)):
+            return aiohttp.ClientTimeout(total=self._timeout)
+        return None
+
     async def _ensure_client(self) -> aiohttp.ClientSession:
         if inspect.isawaitable(self._http_client):
             self._http_client = await self._http_client
@@ -248,13 +255,7 @@ class AsyncNeonHTTPClient:
             self._http_client = maybe_client
 
         if self._http_client is None:
-            if isinstance(self._timeout, aiohttp.ClientTimeout):
-                timeout = self._timeout
-            elif isinstance(self._timeout, (int, float)):
-                timeout = aiohttp.ClientTimeout(total=self._timeout)
-            else:
-                timeout = None
-            self._http_client = aiohttp.ClientSession(timeout=timeout)
+            self._http_client = aiohttp.ClientSession(timeout=self._client_timeout())
 
         if not isinstance(self._http_client, aiohttp.ClientSession):
             raise NeonConfigurationError(
@@ -262,7 +263,12 @@ class AsyncNeonHTTPClient:
             )
 
         if self._http_client.closed:
-            self._http_client = aiohttp.ClientSession()
+            if self._external_client:
+                raise NeonConfigurationError(
+                    "The provided http_client is closed; pass an open session "
+                    "or omit http_client."
+                )
+            self._http_client = aiohttp.ClientSession(timeout=self._client_timeout())
 
         return self._http_client
 
