@@ -29,7 +29,6 @@ def unique_prefix() -> str:
 
 
 @pytest_asyncio.fixture(scope="module")
-@logfire.instrument("Pytest: seeded_data", new_trace=True)
 async def seeded_data(neondb: NeonNativeAsyncEngine, unique_prefix: str):
     """Seed the database once for all tests in this module."""
     users = [

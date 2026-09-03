@@ -164,7 +164,7 @@ runtime package and is not included in the default published dependencies.
 ```bash
 uv sync --group dev --extra telemetry
 ENABLE_TEST_TELEMETRY=1 LOGFIRE_TOKEN=<write-token> \
-  uv run --group dev --extra telemetry pytest -o addopts="--logfire" tests/units -q
+  uv run --group dev --extra telemetry pytest tests/units -q
 ```
 
 Request and response headers, bodies, PostgreSQL frames, SQL parameters, and
@@ -187,7 +187,7 @@ protected manual/scheduled workflow described in `TESTING.md`.
 ### Test Coverage (Optional)
 
 ```bash
-uv run --with pytest-cov pytest tests/units -q \
+uv run --group dev --with pytest-cov pytest tests/units -q \
   --cov=sqlalchemy_neon --cov-report=term-missing
 ```
 
