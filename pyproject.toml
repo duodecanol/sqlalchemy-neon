@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "Native async SQLAlchemy execution for Neon over HTTP"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 authors = [
-    {name = "duodecanol"}
+    {name = "Choe Hwal", email = "41378264+duodecanol@users.noreply.github.com"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -21,12 +21,17 @@ classifiers = [
 ]
 keywords = ["sqlalchemy", "neon", "postgresql", "serverless", "http", "async"]
 
+
 dependencies = [
     "sqlalchemy[asyncio]>=2.0,<2.1",
     "psycopg[binary]>=3.2.5",
     "aiohttp>=3.11",
     "rich>=14.3.2",
 ]
+[project.urls]
+Repository = "https://github.com/duodecanol/sqlalchemy-neon"
+Issues = "https://github.com/duodecanol/sqlalchemy-neon/issues"
+Documentation = "https://github.com/duodecanol/sqlalchemy-neon#readme"
 
 [dependency-groups]
 dev = [
@@ -51,6 +56,7 @@ packages = ["src/sqlalchemy_neon"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
+    "/LICENSE",
 ]
 
 [tool.pytest.ini_options]
