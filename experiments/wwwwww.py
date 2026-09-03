@@ -1,8 +1,18 @@
+import os
+
 import logfire
-logfire.configure(send_to_logfire=True, service_name="neon-serverless", scrubbing=False)
-# logfire.install_auto_tracing("sqlalchemy_neon.pg_protocol", min_duration=0.02)
+
+_telemetry_enabled = (
+    os.getenv("ENABLE_EXPERIMENT_TELEMETRY") == "1"
+    and bool(os.getenv("LOGFIRE_TOKEN"))
+)
+logfire.configure(
+    send_to_logfire="if-token-present" if _telemetry_enabled else False,
+    service_name="neon-serverless-experiment",
+    scrubbing=True,
+)
 logfire.install_auto_tracing("aiohttp.client", min_duration=0.02)
-logfire.instrument_aiohttp_client(capture_all=True)
+logfire.instrument_aiohttp_client()
 logfire.instrument_psycopg("psycopg")
 
 from typing import AsyncGenerator
@@ -10,7 +20,7 @@ from typing import AsyncGenerator
 import asyncio
 import uuid
 import contextlib
-import os
+
 import re
 
 

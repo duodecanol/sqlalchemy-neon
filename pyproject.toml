@@ -85,4 +85,4 @@ markers = [
 [tool.mypy]
 mypy_path = ["src", "."]
 explicit_package_bases = true
-files = ["src", "tests", "testsupport", "experiments"]
+files = ["src", "tests", "testsupport"]
