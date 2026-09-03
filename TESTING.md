@@ -35,10 +35,11 @@ local test run.
   does not provision or target a shared production database. The test safety
   fixture still requires the exact database allowlist before issuing DDL.
 
-The protected integration command is:
+The following command is a protected/manual operation. Run it only after the
+prerequisites and environment setup below, against a disposable test database:
 
 ```bash
-uv run --group dev pytest tests/integration -v
+uv run --group dev --extra telemetry pytest tests/integration -v
 ```
 
 ## Test Structure
@@ -68,9 +69,12 @@ Integration tests require a dedicated disposable Neon database. They use
 
 - `tests/integration/test_integration_basics.py`: async CRUD, filters,
   aggregates, relationships, and type coverage.
-- `tests/integration/test_integration_hard.py`: nested loader options and
+- `tests/integration/test_integration_hard.py`: complex loader options and
   concurrent native queries.
+- `tests/integration/test_json_load.py`: large JSON, bytea, and parameter
+  payloads.
 - `tests/integration/test_pipeline.py`: WebSocket protocol integration.
+- `tests/integration/conftest.py`: protected live-database fixtures.
 
 The integration models cover users, posts, comments, tags, products, and
 complex JSON/type values. DDL is destructive and guarded by the environment
@@ -98,22 +102,22 @@ export NEON_TEST_ALLOW_DESTRUCTIVE=1
 ### Run Tests
 
 ```bash
-uv run --group dev pytest tests/integration -v
+uv run --group dev --extra telemetry pytest tests/integration -v
 ```
 
 Run a specific class or test:
 
 ```bash
-uv run --group dev pytest \
+uv run --group dev --extra telemetry pytest \
   tests/integration/test_integration_basics.py::TestAsyncBasicCRUD -v
-uv run --group dev pytest \
+uv run --group dev --extra telemetry pytest \
   tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_single_user -v
 ```
 
 Run with detailed output:
 
 ```bash
-uv run --group dev pytest tests/integration -v -s
+uv run --group dev --extra telemetry pytest tests/integration -v -s
 ```
 
 Without all three `NEON_TEST_*` variables, destructive integration fixtures
@@ -201,8 +205,8 @@ database to the allowlist.
 
 ### Test failures due to existing data
 
-The tests use `scope="module"` fixtures that clean up after themselves. If tests fail:
-
+The session-scoped setup fixture drops and recreates the tables at the start
+of a run. If tests fail:
 1. Check for leftover data only in the dedicated test database.
 2. Manually clean up only that disposable test database if needed.
 3. Re-run tests.
@@ -220,7 +224,7 @@ uv sync --group dev
 Generate a unit-test coverage report without modifying project dependencies:
 
 ```bash
-uv run --with pytest-cov pytest tests/units -q \
+uv run --group dev --with pytest-cov pytest tests/units -q \
   --cov=sqlalchemy_neon --cov-report=term-missing
 ```
 
