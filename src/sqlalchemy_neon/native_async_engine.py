@@ -13,7 +13,6 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 
 import aiohttp
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine.result import IteratorResult, SimpleResultMetaData
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.sql import ClauseElement
@@ -26,11 +25,20 @@ from .neon_http_client import (
     TransactionOptions,
 )
 from .errors import NotSupportedError
+from .sqlalchemy_compat import (
+    compiled_result_columns,
+    ensure_supported_sqlalchemy,
+    loader_contexts,
+    loader_path,
+    loader_strategy,
+    postgres_dialect,
+    statement_loader_options,
+    strip_loader_options,
+)
 from .types import TypeConverter
 
 _PYFORMAT_TOKEN = re.compile(r"%\(([^)]+)\)s")
 _TYPE_CONVERTER = TypeConverter()
-_PgDialect = postgresql.psycopg.PGDialect_psycopg
 _NO_DEFAULT = object()
 _SUPPORTED_RELATIONSHIP_STRATEGIES = frozenset(
     {"selectin", "subquery", "joined", "noload"}
@@ -85,6 +93,7 @@ def compile_sql(
     parameters: Mapping[str, Any] | Sequence[Any] | None = None,
 ) -> tuple[str, list[Any]]:
     """Compile a SQLAlchemy Core statement into Neon HTTP SQL + parameters."""
+    ensure_supported_sqlalchemy()
     if isinstance(statement, str):
         if parameters is None:
             return statement, []
@@ -96,7 +105,7 @@ def compile_sql(
         return statement, list(parameters)
 
     compiled = statement.compile(
-        dialect=_PgDialect(paramstyle="pyformat"),
+        dialect=postgres_dialect(paramstyle="pyformat"),
         compile_kwargs={"render_postcompile": True},
     )
     mapping = _coerce_param_mapping(compiled, parameters)
@@ -373,16 +382,14 @@ def _identity_tuple(instance: Any, mapper: Any) -> tuple[Any, ...]:
 
 
 def _strip_joinedload_options(statement: ClauseElement) -> ClauseElement:
-    with_options = getattr(statement, "_with_options", ())
+    with_options = statement_loader_options(statement)
     for load_opt in with_options:
-        for context in getattr(load_opt, "context", ()):
+        for context in loader_contexts(load_opt):
             if any(
                 key == "lazy" and value == "joined"
-                for key, value in getattr(context, "strategy", ())
+                for key, value in loader_strategy(context)
             ):
-                stripped = statement._generate()
-                stripped._with_options = ()
-                return stripped
+                return strip_loader_options(statement)
     return statement
 
 
@@ -426,14 +433,14 @@ def _apply_type_processors(
         return rows
 
     compiled = statement.compile(
-        dialect=_PgDialect(paramstyle="pyformat"),
+        dialect=postgres_dialect(paramstyle="pyformat"),
         compile_kwargs={"render_postcompile": True},
     )
-    result_columns = getattr(compiled, "_result_columns", None)
+    result_columns = compiled_result_columns(compiled)
     if not result_columns or len(result_columns) != len(keys):
         return rows
 
-    dialect = _PgDialect()
+    dialect = postgres_dialect()
     processors = []
     for entry in result_columns:
         processor = entry.type.result_processor(dialect, None)
@@ -479,7 +486,7 @@ def _build_sa_result(
     )
     if entity_info is not None:
         entity_label, mapper = entity_info
-        dialect = _PgDialect()
+        dialect = postgres_dialect()
         row_maps = [dict(zip(keys, row)) for row in rows]
         entity_rows = [
             (_row_to_entity(mapper, row_map, dialect=dialect),) for row_map in row_maps
@@ -514,6 +521,7 @@ class NeonNativeAsyncEngine:
         use_secure_websocket: bool = True,
         websocket_heartbeat: float | None = 30.0,
     ) -> None:
+        ensure_supported_sqlalchemy()
         # http_client type check
         if http_client is not None and not isinstance(
             http_client, aiohttp.ClientSession
@@ -576,7 +584,7 @@ class NeonNativeAsyncEngine:
         entity_label, mapper = entity_info
         keys, rows = _normalize_raw_rows(raw)
         row_maps = [dict(zip(keys, row)) for row in rows]
-        dialect = _PgDialect()
+        dialect = postgres_dialect()
         entities = [
             _row_to_entity(mapper, row_map, dialect=dialect) for row_map in row_maps
         ]
@@ -741,11 +749,11 @@ class NeonNativeAsyncEngine:
 
     def _extract_load_plans(self, statement: ClauseElement) -> list[dict[str, Any]]:
         plans: list[dict[str, Any]] = []
-        with_options = getattr(statement, "_with_options", ())
+        with_options = statement_loader_options(statement)
         seen: set[tuple[str, ...]] = set()
 
         for load_opt in with_options:
-            path = getattr(load_opt, "path", None)
+            path = loader_path(load_opt)
             if path is None:
                 continue
 
@@ -763,9 +771,9 @@ class NeonNativeAsyncEngine:
             seen.add(signature)
 
             strategies: list[str] = []
-            for ctx in getattr(load_opt, "context", ()):
+            for ctx in loader_contexts(load_opt):
                 lazy_strategy = "selectin"
-                for key, value in getattr(ctx, "strategy", ()):
+                for key, value in loader_strategy(ctx):
                     if key == "lazy":
                         lazy_strategy = value
                         break
@@ -876,7 +884,7 @@ class NeonNativeAsyncEngine:
         raw = await self._client.query(sql, params, options=options)
         keys, rows = _normalize_raw_rows(raw)
         row_maps = [dict(zip(keys, row)) for row in rows]
-        dialect = _PgDialect()
+        dialect = postgres_dialect()
 
         by_parent: dict[tuple[Any, ...], list[Any]] = {
             parent_id: [] for parent_id in parent_ids
