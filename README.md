@@ -62,6 +62,14 @@ execution. Select Core columns explicitly or issue separate queries when a
 multi-value result is required. Object-form responses with duplicate field names
 are also rejected instead of being normalized into potentially incorrect values.
 
+Relationship loader strategy support:
+
+- `selectinload` and `subqueryload` issue separate relationship queries.
+- `joinedload` is accepted as a separate-query equivalent; it does not add a SQL
+  join to the root query.
+- `noload` initializes the relationship as empty/`None` without querying it.
+- `lazyload` and `raiseload` are rejected with `NotSupportedError`.
+
 ## Connection String Format
 
 The connection URL may include PostgreSQL or Neon query parameters, such as

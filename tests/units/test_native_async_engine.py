@@ -838,14 +838,205 @@ async def test_native_engine_preserves_multiple_orm_column_result(
 
 
 @pytest.mark.asyncio
-async def test_native_engine_hydrates_loader_option_relationships(
+async def test_native_engine_hydrates_composite_relationship_identity(
+    mock_connection_string: str,
+):
+    metadata = sa.MetaData()
+    parent_table = sa.Table(
+        "composite_parents",
+        metadata,
+        sa.Column("tenant", sa.String, primary_key=True),
+        sa.Column("key", sa.Integer, primary_key=True),
+        sa.Column("name", sa.String, nullable=False),
+    )
+    child_table = sa.Table(
+        "composite_children",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("tenant", sa.String, nullable=False),
+        sa.Column("parent_key", sa.Integer, nullable=False),
+        sa.Column("value", sa.String, nullable=False),
+        sa.ForeignKeyConstraint(
+            ["tenant", "parent_key"],
+            ["composite_parents.tenant", "composite_parents.key"],
+        ),
+    )
+    registry = orm.registry()
+
+    class CompositeParent:
+        def __init__(self, tenant=None, key=None, name=None):
+            self.tenant = tenant
+            self.key = key
+            self.name = name
+
+    class CompositeChild:
+        def __init__(self, id=None, tenant=None, parent_key=None, value=None):
+            self.id = id
+            self.tenant = tenant
+            self.parent_key = parent_key
+            self.value = value
+
+    registry.map_imperatively(
+        CompositeParent,
+        parent_table,
+        properties={
+            "children": orm.relationship(
+                CompositeChild,
+                back_populates="parent",
+            )
+        },
+    )
+    registry.map_imperatively(
+        CompositeChild,
+        child_table,
+        properties={
+            "parent": orm.relationship(
+                CompositeParent,
+                back_populates="children",
+            )
+        },
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.query_calls = []
+
+        async def query(self, sql, params, options=None):
+            self.query_calls.append(sql)
+            if "join composite_children" not in sql.lower():
+                return QueryResult(
+                    rows=[
+                        {"tenant": "tenant-1", "key": 1, "name": "first"},
+                        {"tenant": "tenant-1", "key": 2, "name": "second"},
+                    ],
+                    fields=[
+                        {"name": "tenant"},
+                        {"name": "key", "dataTypeID": PostgresOID.INT4},
+                        {"name": "name"},
+                    ],
+                    row_count=2,
+                    command="SELECT",
+                )
+
+            return QueryResult(
+                rows=[
+                    {
+                        "__parent_identity_0": "tenant-1",
+                        "__parent_identity_1": 1,
+                        "id": 11,
+                        "tenant": "tenant-1",
+                        "parent_key": 1,
+                        "value": "first-child",
+                    },
+                    {
+                        "__parent_identity_0": "tenant-1",
+                        "__parent_identity_1": 2,
+                        "id": 22,
+                        "tenant": "tenant-1",
+                        "parent_key": 2,
+                        "value": "second-child",
+                    },
+                ],
+                fields=[
+                    {"name": "__parent_identity_0"},
+                    {
+                        "name": "__parent_identity_1",
+                        "dataTypeID": PostgresOID.INT4,
+                    },
+                    {"name": "id", "dataTypeID": PostgresOID.INT4},
+                    {"name": "tenant"},
+                    {"name": "parent_key", "dataTypeID": PostgresOID.INT4},
+                    {"name": "value"},
+                ],
+                row_count=2,
+                command="SELECT",
+            )
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    result = await engine.execute(
+        sa.select(CompositeParent).options(orm.selectinload(CompositeParent.children))
+    )
+    parents = result.scalars().all()
+
+    assert len(fake.query_calls) == 2
+    assert [
+        (parent.key, [child.value for child in parent.children]) for parent in parents
+    ] == [
+        (1, ["first-child"]),
+        (2, ["second-child"]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_native_engine_noload_skips_relationship_query(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        def __init__(self):
+            self.query_calls = 0
+
+        async def query(self, sql, params, options=None):
+            self.query_calls += 1
+            return QueryResult(
+                rows=[{"id": 1, "username": "alice", "email": "alice@example.com"}],
+                fields=[
+                    {"name": "id", "dataTypeID": PostgresOID.INT4},
+                    {"name": "username"},
+                    {"name": "email"},
+                ],
+                row_count=1,
+                command="SELECT",
+            )
+
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    fake = FakeClient()
+    engine._client = fake
+
+    result = await engine.execute(sa.select(User).options(orm.noload(User.posts)))
+    user = result.scalar_one()
+
+    assert fake.query_calls == 1
+    assert user.posts == []
+
+
+@pytest.mark.asyncio
+async def test_native_engine_rejects_unsupported_relationship_strategies(
     mock_connection_string: str,
 ):
     class FakeClient:
         async def query(self, sql, params, options=None):
-            sql_l = " ".join(sql.lower().split())
+            raise AssertionError("unsupported loader must be rejected first")
 
-            if "from public.posts" in sql_l and "join" not in sql_l:
+    engine = NeonNativeAsyncEngine(mock_connection_string)
+    engine._client = FakeClient()
+
+    for option in (orm.raiseload(User.posts), orm.lazyload(User.posts)):
+        with pytest.raises(NotSupportedError, match="Loader strategy"):
+            await engine.execute(sa.select(User).options(option))
+
+
+@pytest.mark.asyncio
+async def test_native_engine_hydrates_loader_option_relationships(
+    mock_connection_string: str,
+):
+    class FakeClient:
+        def __init__(self):
+            self.query_calls = []
+
+        async def query(self, sql, params, options=None):
+            sql_l = " ".join(sql.lower().split())
+            self.query_calls.append(sql_l)
+
+            if "from public.posts" in sql_l and (
+                "join" not in sql_l
+                or (
+                    "left outer join public.users" in sql_l
+                    and "where public.posts.id =" in sql_l
+                )
+            ):
                 return QueryResult(
                     rows=[
                         {
@@ -988,18 +1179,20 @@ async def test_native_engine_hydrates_loader_option_relationships(
             return None
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    fake = FakeClient()
+    engine._client = fake
 
     stmt = (
         sa.select(Post)
         .where(Post.id == 1)
         .options(
-            orm.subqueryload(Post.author),
+            orm.joinedload(Post.author),
             orm.subqueryload(Post.tags),
             orm.subqueryload(Post.comments).selectinload(Comment.author),
         )
     )
     result = await engine.execute(stmt)
+    assert "left outer join" not in fake.query_calls[0]
     post = result.unique().scalar_one()
 
     assert post.author is not None
