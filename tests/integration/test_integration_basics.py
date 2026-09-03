@@ -18,7 +18,7 @@ Tests cover:
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import selectinload
 from sqlalchemy_neon import NeonNativeAsyncEngine
 
-from testsupport.models import Base, Comment, Post, Product, Tag, User, post_tags
+from testsupport.models import Comment, Post, Product, Tag, User, post_tags
 
 
 def get_unique_name(name: str) -> str:
@@ -723,7 +723,7 @@ class TestAsyncDateTimeTypes:
 
     async def test_datetime_type(self, neondb: NeonNativeAsyncEngine):
         """Test DateTime type."""
-        now = datetime.now(UTC).replace(microsecond=0, tzinfo=None)
+        now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
         uname = get_unique_name("datetime_user")
         user = User(username=uname, email=f"{uname}@example.com", created_at=now)
         await neondb.add(user)

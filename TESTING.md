@@ -23,7 +23,7 @@ local test run.
 - **Offline checks** (`.github/workflows/tests.yml`) run on every pull request
   and push. They run `uv build`, production-source Ruff checks, a mypy check
   for the SQLAlchemy compatibility boundary, and the offline unit suite across
-  Python 3.11/3.12 and SQLAlchemy 2.0.0/2.0.46. They do not receive database
+  Python 3.10/3.12 and SQLAlchemy 2.0.0/2.0.46. They do not receive database
   credentials.
 - **Secret scan** (`.github/workflows/secret-scan.yml`) runs on every pull
   request and push.
