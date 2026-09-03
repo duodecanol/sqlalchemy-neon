@@ -148,18 +148,23 @@ cd sqlalchemy-neon
 uv sync --group dev
 ```
 
+The development group installs tests, lint, and type-check tooling. Optional
+Logfire telemetry is kept out of both runtime and default development installs;
+add `--extra telemetry` when it is explicitly needed.
+
 Python 3.10 is the supported minimum. Offline CI verifies the minimum and
 current documented Python versions against the supported SQLAlchemy 2.0.x
 range.
 
 ### Development Telemetry (Optional)
 
-Logfire is development-only and opt-in. It is not imported by the runtime
-package and is not included in the published wheel's dependencies.
+Logfire is optional, development-only, and opt-in. It is not imported by the
+runtime package and is not included in the default published dependencies.
 
 ```bash
+uv sync --group dev --extra telemetry
 ENABLE_TEST_TELEMETRY=1 LOGFIRE_TOKEN=<write-token> \
-  uv run --group dev pytest -o addopts="--logfire" tests/units -q
+  uv run --group dev --extra telemetry pytest -o addopts="--logfire" tests/units -q
 ```
 
 Request and response headers, bodies, PostgreSQL frames, SQL parameters, and

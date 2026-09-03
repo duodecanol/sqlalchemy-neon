@@ -32,4 +32,4 @@ jobs:
           ENABLE_TEST_TELEMETRY: "0"
           LOGFIRE_TOKEN: ""
         run: >-
-          uv run --group dev pytest tests/integration -v
+          uv run --group dev --extra telemetry pytest tests/integration -v

@@ -23,9 +23,9 @@ jobs:
       - name: Verify source distribution contents
         run: uv run python tests/verify_sdist.py
       - name: Run production lint
-        run: uv run ruff check src
+        run: uv run --group dev ruff check src
       - name: Run compatibility type check
-        run: uv run --with mypy mypy src/sqlalchemy_neon/sqlalchemy_compat.py
+        run: uv run --group dev mypy src/sqlalchemy_neon/sqlalchemy_compat.py
 
   unit:
     name: Python ${{ matrix.python-version }} / SQLAlchemy ${{ matrix.sqlalchemy-version }}
