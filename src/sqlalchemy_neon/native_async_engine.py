@@ -618,8 +618,11 @@ class NeonNativeAsyncEngine:
         insert_values: dict[str, Any] = {}
         params: dict[str, Any] = {}
 
+        # Use SQLAlchemy's resolved generator; ``autoincrement == "auto"`` is
+        # also truthy for client-assigned natural and composite primary keys.
+        autoincrement_column = table._autoincrement_column
         for column in table.columns:
-            if column.primary_key and column.autoincrement:
+            if column.primary_key and autoincrement_column is column:
                 continue
 
             value = getattr(instance, column.key, None)
