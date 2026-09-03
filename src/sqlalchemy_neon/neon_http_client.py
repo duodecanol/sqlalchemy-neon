@@ -303,8 +303,8 @@ class AsyncNeonHTTPClient:
                     response_body=response_text,
                 ) from e
 
-        except aiohttp.ConnectionTimeoutError as e:
-            raise NeonConnectionError(f"Request timeout: {e}") from e
+        except asyncio.TimeoutError as e:
+            raise NeonConnectionError("Request timed out.") from e
         except aiohttp.ClientConnectionError as e:
             raise NeonConnectionError(f"Connection error: {e}") from e
         except aiohttp.ClientError as e:
