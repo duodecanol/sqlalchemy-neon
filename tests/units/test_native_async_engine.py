@@ -50,6 +50,25 @@ def test_compile_sql_core_statement_reuses_named_bind():
     assert params == ["alice"]
 
 
+def test_native_engine_forwards_transport_size_limits(
+    mock_connection_string: str,
+):
+    http_engine = NeonNativeAsyncEngine(
+        mock_connection_string,
+        max_response_size=128,
+    )
+    ws_engine = NeonNativeAsyncEngine(
+        mock_connection_string,
+        transport="websocket",
+        max_message_size=256,
+        max_result_size=512,
+    )
+
+    assert http_engine._client._max_response_size == 128
+    assert ws_engine._client._max_message_size == 256
+    assert ws_engine._client._max_result_size == 512
+
+
 @pytest.mark.asyncio
 async def test_native_engine_execute_forwards_to_client(mock_connection_string: str):
     class FakeClient:

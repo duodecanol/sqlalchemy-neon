@@ -47,7 +47,7 @@ _DRIVER_URL_PARAMETERS = frozenset(
         "fetch_function",
     }
 )
-
+DEFAULT_MAX_RESPONSE_SIZE = MAX_MESSAGE_SIZE
 
 def _protocol_read_timeout(
     timeout: float | aiohttp.ClientTimeout | None,
@@ -55,6 +55,11 @@ def _protocol_read_timeout(
     if isinstance(timeout, aiohttp.ClientTimeout):
         return timeout.total if timeout.total is not None else timeout.sock_read
     return float(timeout) if timeout is not None else None
+
+def _validate_size_limit(name: str, value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise NeonConfigurationError(f"{name} must be an integer >= 1.")
+    return value
 
 
 class IsolationLevel(Enum):
@@ -86,7 +91,6 @@ class QueryOptions:
     """Options for query execution."""
 
     array_mode: bool = False
-    full_results: bool = True
     auth_token: str | None = None
 
 
@@ -98,7 +102,6 @@ class TransactionOptions:
     read_only: bool = False
     deferrable: bool = False
     array_mode: bool = False
-    full_results: bool = True
     auth_token: str | None = None
 
     def __post_init__(self) -> None:
@@ -135,11 +138,15 @@ class AsyncNeonHTTPClient:
         fetch_function: (
             Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
         ) = None,
+        max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
     ) -> None:
         self._parsed_connection = self._parse_connection_string(connection_string)
         self._connection_string = self._parsed_connection.geturl()
         self._auth_token = auth_token
         self._timeout = timeout
+        self._max_response_size = _validate_size_limit(
+            "max_response_size", max_response_size
+        )
         self._fetch_endpoint = fetch_endpoint
         self._fetch_function = fetch_function
         self._url = self._resolve_fetch_url(jwt_auth=bool(auth_token))
@@ -285,13 +292,28 @@ class AsyncNeonHTTPClient:
                     json_body,
                     headers,
                 )
+                if len(response_text.encode("utf-8")) > self._max_response_size:
+                    raise NeonHTTPError(
+                        "HTTP response exceeds the configured maximum size.",
+                        status_code=status_code,
+                    )
             else:
                 client = await self._ensure_client()
                 async with client.post(
                     url, data=json_body, headers=headers
                 ) as response:
                     status_code = response.status
-                    response_text = await response.text()
+                    response_body = await response.content.read(
+                        self._max_response_size + 1
+                    )
+                    if len(response_body) > self._max_response_size:
+                        raise NeonHTTPError(
+                            "HTTP response exceeds the configured maximum size.",
+                            status_code=status_code,
+                        )
+                    response_text = response_body.decode(
+                        response.get_encoding() or "utf-8"
+                    )
 
             if status_code == 401:
                 raise NeonAuthenticationError(
@@ -452,6 +474,8 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         ws_proxy: str | Callable[[str, int], str] | None = None,
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
+        max_message_size: int = MAX_MESSAGE_SIZE,
+        max_result_size: int = MAX_MESSAGE_SIZE,
     ) -> None:
         _warn_ignored_websocket_auth_token(auth_token)
 
@@ -460,6 +484,12 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             http_client=http_client,
             auth_token=None,
             timeout=timeout,
+        )
+        self._max_message_size = _validate_size_limit(
+            "max_message_size", max_message_size
+        )
+        self._max_result_size = _validate_size_limit(
+            "max_result_size", max_result_size
         )
 
         host = self._parsed_connection.hostname
@@ -500,7 +530,7 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             self._ws = await client.ws_connect(
                 self._ws_url,
                 heartbeat=self._heartbeat,
-                max_msg_size=MAX_MESSAGE_SIZE + 1,
+                max_msg_size=self._max_message_size + 1,
             )
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise NeonConnectionError(f"WebSocket connect error: {e}") from e
@@ -529,6 +559,8 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
             recv_fn,
             allow_insecure_password_auth=self._ws_url.startswith("wss://"),
             read_timeout=_protocol_read_timeout(self._timeout),
+            max_message_size=self._max_message_size,
+            max_result_size=self._max_result_size,
         )
         return self._protocol
 
@@ -805,6 +837,8 @@ class AsyncNeonWebSocketPool:
         ws_proxy: str | Callable[[str, int], str] | None = None,
         use_secure_websocket: bool = True,
         heartbeat: float | None = 30.0,
+        max_message_size: int = MAX_MESSAGE_SIZE,
+        max_result_size: int = MAX_MESSAGE_SIZE,
     ) -> None:
         _warn_ignored_websocket_auth_token(auth_token)
 
@@ -819,6 +853,12 @@ class AsyncNeonWebSocketPool:
         self._ws_proxy = ws_proxy
         self._use_secure_websocket = use_secure_websocket
         self._heartbeat = heartbeat
+        self._max_message_size = _validate_size_limit(
+            "max_message_size", max_message_size
+        )
+        self._max_result_size = _validate_size_limit(
+            "max_result_size", max_result_size
+        )
 
         self._create_lock = asyncio.Lock()
         self._available: asyncio.LifoQueue[AsyncNeonWebSocketClient] = (
@@ -837,6 +877,8 @@ class AsyncNeonWebSocketPool:
             ws_proxy=self._ws_proxy,
             use_secure_websocket=self._use_secure_websocket,
             heartbeat=self._heartbeat,
+            max_message_size=self._max_message_size,
+            max_result_size=self._max_result_size,
         )
         self._clients.add(client)
         return client

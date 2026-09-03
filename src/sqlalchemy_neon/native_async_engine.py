@@ -18,6 +18,8 @@ from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.sql import ClauseElement
 
 from .neon_http_client import (
+    DEFAULT_MAX_RESPONSE_SIZE,
+    MAX_MESSAGE_SIZE,
     AsyncNeonHTTPClient,
     AsyncNeonWebSocketPool,
     QueryOptions,
@@ -511,6 +513,9 @@ class NeonNativeAsyncEngine:
         | None = None,
         auth_token: str | None = None,
         timeout: float | None = None,
+        max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
+        max_message_size: int = MAX_MESSAGE_SIZE,
+        max_result_size: int = MAX_MESSAGE_SIZE,
         fetch_endpoint: str | Callable[[str, int, bool], str] | None = None,
         fetch_function: (
             Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
@@ -538,6 +543,7 @@ class NeonNativeAsyncEngine:
                 timeout=timeout,
                 fetch_endpoint=fetch_endpoint,
                 fetch_function=fetch_function,
+                max_response_size=max_response_size,
             )
         elif transport == "websocket":
             self._client = AsyncNeonWebSocketPool(
@@ -549,6 +555,8 @@ class NeonNativeAsyncEngine:
                 ws_proxy=ws_proxy,
                 use_secure_websocket=use_secure_websocket,
                 heartbeat=websocket_heartbeat,
+                max_message_size=max_message_size,
+                max_result_size=max_result_size,
             )
         else:
             raise ValueError(
@@ -1019,6 +1027,7 @@ def create_neon_http_engine(
     http_client: Any | None = None,
     auth_token: str | None = None,
     timeout: float | None = 30.0,
+    max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
     fetch_endpoint: str | Callable[[str, int, bool], str] | None = None,
     fetch_function: (
         Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
@@ -1032,6 +1041,7 @@ def create_neon_http_engine(
         timeout=timeout,
         fetch_endpoint=fetch_endpoint,
         fetch_function=fetch_function,
+        max_response_size=max_response_size,
         transport="http",
     )
 
@@ -1046,6 +1056,8 @@ def create_neon_ws_engine(
     ws_proxy: str | Callable[[str, int], str] | None = None,
     use_secure_websocket: bool = True,
     heartbeat: float | None = 30.0,
+    max_message_size: int = MAX_MESSAGE_SIZE,
+    max_result_size: int = MAX_MESSAGE_SIZE,
 ) -> NeonNativeAsyncEngine:
     """Create an async Neon engine using the WebSocket transport."""
     return NeonNativeAsyncEngine(
@@ -1058,6 +1070,8 @@ def create_neon_ws_engine(
         ws_proxy=ws_proxy,
         use_secure_websocket=use_secure_websocket,
         websocket_heartbeat=heartbeat,
+        max_message_size=max_message_size,
+        max_result_size=max_result_size,
     )
 
 
@@ -1067,6 +1081,9 @@ def create_neon_native_async_engine(
     http_client: Any | None = None,
     auth_token: str | None = None,
     timeout: float | None = 30.0,
+    max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
+    max_message_size: int = MAX_MESSAGE_SIZE,
+    max_result_size: int = MAX_MESSAGE_SIZE,
     fetch_endpoint: str | Callable[[str, int, bool], str] | None = None,
     fetch_function: (
         Callable[[str, str, dict[str, str]], Awaitable[tuple[int, str]]] | None
@@ -1086,9 +1103,12 @@ def create_neon_native_async_engine(
         timeout=timeout,
         fetch_endpoint=fetch_endpoint,
         fetch_function=fetch_function,
+        max_response_size=max_response_size,
         transport=transport,
         websocket_pool_size=websocket_pool_size,
         ws_proxy=ws_proxy,
         use_secure_websocket=use_secure_websocket,
         websocket_heartbeat=websocket_heartbeat,
+        max_message_size=max_message_size,
+        max_result_size=max_result_size,
     )

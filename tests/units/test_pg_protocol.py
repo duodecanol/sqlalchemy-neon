@@ -36,16 +36,13 @@ from sqlalchemy_neon.pg_protocol import (
     PG_PROTOCOL_VERSION,
     READY_MSG,
     ROW_DESC_MSG,
-    FieldDescription,
     PGProtocol,
-    PGQueryResult,
     _BufferedReader,
     _ScramSHA256,
     _PipelineAuthenticationRequired,
     _build_bind_message,
     _build_describe_message,
     _build_execute_message,
-    _build_message,
     _build_parse_message,
     _build_password_message,
     _build_query_message,
@@ -503,7 +500,7 @@ class TestBufferedReader:
         async def recv():
             return raw
 
-        reader = _BufferedReader(recv)
+        reader = _BufferedReader(recv, max_message_size=8)
         msg_type, payload = await reader.read_message()
         assert msg_type == READY_MSG
         assert payload == b"abcd"
@@ -521,10 +518,33 @@ class TestBufferedReader:
             calls += 1
             return raw
 
-        reader = _BufferedReader(recv)
+        reader = _BufferedReader(recv, max_message_size=8)
         with pytest.raises(NeonConnectionError, match="exceeds maximum"):
             await reader.read_message()
         assert calls == 1
+
+    @pytest.mark.asyncio
+    async def test_result_size_is_bounded(self):
+        sent: list[bytes] = []
+        data_row = struct.pack("!H", 1) + struct.pack("!I", 3) + b"abc"
+        incoming = iter(
+            [
+                _backend_msg(DATA_ROW_MSG, data_row),
+                _backend_msg(COMMAND_COMPLETE_MSG, b"SELECT 1\x00"),
+                _backend_msg(READY_MSG, b"I"),
+            ]
+        )
+
+        async def send(data: bytes) -> None:
+            sent.append(data)
+
+        async def recv() -> bytes:
+            return next(incoming)
+
+        protocol = PGProtocol(send, recv, max_result_size=len(data_row) - 1)
+
+        with pytest.raises(NeonConnectionError, match="Query result exceeds"):
+            await protocol.simple_query("SELECT 1")
 
 
 # ===========================================================================

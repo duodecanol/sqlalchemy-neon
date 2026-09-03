@@ -18,6 +18,7 @@ from typing import Awaitable, Callable
 
 from .errors import (
     NeonAuthenticationError,
+    NeonConfigurationError,
     NeonConnectionError,
     NeonQueryError,
 )
@@ -131,18 +132,22 @@ class _BufferedReader:
     This reader maintains an internal buffer and serves exact byte counts.
     """
 
-    __slots__ = ("_recv", "_buffer", "_pos", "_read_timeout")
+    __slots__ = ("_recv", "_buffer", "_pos", "_read_timeout", "_max_message_size")
 
     def __init__(
         self,
         recv_fn: Callable[[], Awaitable[bytes]],
         *,
         read_timeout: float | None = None,
+        max_message_size: int = MAX_MESSAGE_SIZE,
     ) -> None:
+        if max_message_size < 1:
+            raise NeonConfigurationError("max_message_size must be >= 1.")
         self._recv = recv_fn
         self._buffer = bytearray()
         self._pos = 0
         self._read_timeout = read_timeout
+        self._max_message_size = max_message_size
 
     def _deadline(self) -> float | None:
         if self._read_timeout is None:
@@ -201,9 +206,9 @@ class _BufferedReader:
             raise NeonConnectionError(
                 f"Invalid message length {length} for type {chr(msg_type)}"
             )
-        if length > MAX_MESSAGE_SIZE:
+        if length > self._max_message_size:
             raise NeonConnectionError(
-                f"Message length {length} exceeds maximum {MAX_MESSAGE_SIZE}"
+                f"Message length {length} exceeds maximum {self._max_message_size}"
             )
         payload_len = length - 4
         payload = (
@@ -475,9 +480,20 @@ class PGProtocol:
         *,
         allow_insecure_password_auth: bool = True,
         read_timeout: float | None = None,
+        max_message_size: int = MAX_MESSAGE_SIZE,
+        max_result_size: int = MAX_MESSAGE_SIZE,
     ) -> None:
+        if max_message_size < 1:
+            raise NeonConfigurationError("max_message_size must be >= 1.")
+        if max_result_size < 1:
+            raise NeonConfigurationError("max_result_size must be >= 1.")
         self._send = send_fn
-        self._reader = _BufferedReader(recv_fn, read_timeout=read_timeout)
+        self._max_result_size = max_result_size
+        self._reader = _BufferedReader(
+            recv_fn,
+            read_timeout=read_timeout,
+            max_message_size=max_message_size,
+        )
         self._server_params: dict[str, str] = {}
         self._backend_pid: int = 0
         self._backend_secret: int = 0
@@ -737,6 +753,7 @@ class PGProtocol:
         results: list[PGQueryResult] = []
         current_fields: list[FieldDescription] = []
         current_rows: list[list[bytes | None]] = []
+        current_result_size = 0
 
         while True:
             msg_type, payload = await self._reader.read_message()
@@ -744,7 +761,14 @@ class PGProtocol:
             if msg_type == ROW_DESC_MSG:
                 current_fields = _parse_row_description(payload)
                 current_rows = []
+                current_result_size = 0
             elif msg_type == DATA_ROW_MSG:
+                current_result_size += len(payload)
+                if current_result_size > self._max_result_size:
+                    raise NeonConnectionError(
+                        "Query result exceeds maximum "
+                        f"{self._max_result_size} bytes."
+                    )
                 current_rows.append(_parse_data_row(payload))
             elif msg_type == COMMAND_COMPLETE_MSG:
                 tag = payload[:-1].decode()
@@ -757,6 +781,7 @@ class PGProtocol:
                 )
                 current_fields = []
                 current_rows = []
+                current_result_size = 0
             elif msg_type == EMPTY_QUERY_MSG:
                 results.append(PGQueryResult(fields=[], rows=[], command_tag=""))
             elif msg_type == ERROR_RESPONSE_MSG:
@@ -801,10 +826,10 @@ class PGProtocol:
         return await self._read_extended_query_result()
 
     async def _read_extended_query_result(self) -> PGQueryResult:
-        # Read responses
         fields: list[FieldDescription] = []
         rows: list[list[bytes | None]] = []
         command_tag = ""
+        result_size = 0
 
         while True:
             msg_type, payload = await self._reader.read_message()
@@ -818,14 +843,15 @@ class PGProtocol:
             elif msg_type == NO_DATA_MSG:
                 fields = []
             elif msg_type == DATA_ROW_MSG:
+                result_size += len(payload)
+                if result_size > self._max_result_size:
+                    raise NeonConnectionError(
+                        "Query result exceeds maximum "
+                        f"{self._max_result_size} bytes."
+                    )
                 rows.append(_parse_data_row(payload))
             elif msg_type == COMMAND_COMPLETE_MSG:
                 command_tag = payload[:-1].decode()
-                # For extended query, we keep reading until ReadyForQuery?
-                # Actually SYNC triggers ReadyForQuery.
-                # CommandComplete is distinct from ReadyForQuery.
-                # But in standard extended flow: Parse(C), Bind(C), Describe(RowDesc/NoData), Execute(DataRow... CommandC), Sync(Ready)
-                # So we continue loop.
             elif msg_type == ERROR_RESPONSE_MSG:
                 ef = _parse_error_fields(payload)
                 await self._read_until_ready()

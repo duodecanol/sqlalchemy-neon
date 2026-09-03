@@ -100,6 +100,11 @@ the HTTP transport preserves the encoded connection URL.
 - `websocket_pool_size`: Max pooled WS connections when `transport="websocket"`
 - `fetch_endpoint`: Override Neon HTTP endpoint URL (or provide resolver callable)
 - `fetch_function`: Inject custom async HTTP transport callable
+- `max_response_size`: Maximum HTTP response body in bytes (default: 16 MiB).
+- `max_message_size`: Maximum PostgreSQL WebSocket message in bytes (default:
+  16 MiB).
+- `max_result_size`: Maximum materialized PostgreSQL WebSocket result bytes
+  (default: 16 MiB).
 
 These options are ignored when present in the connection URL: `auth_token`,
 `timeout`, `transport`, `websocket_pool_size`, `fetch_endpoint`, or
@@ -121,7 +126,15 @@ ws_engine = create_neon_native_async_engine(
     transport="websocket",
     websocket_pool_size=10,
 )
+
 ```
+
+`QueryOptions` and `TransactionOptions` materialize complete result sets; the
+driver does not provide streaming or server-side cursors. `array_mode` is
+supported on both transports. The former `full_results` option is not part of
+the public API because it had no observable effect. Choose a conservative
+response/message limit for application workloads; increase the corresponding
+constructor option only when the resulting in-memory materialization is safe.
 
 ## Development
 
