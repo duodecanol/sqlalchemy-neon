@@ -1076,6 +1076,19 @@ class TestPGProtocolTerminate:
         await proto.terminate()
 
 
+    @pytest.mark.asyncio
+    async def test_terminate_propagates_unexpected_errors(self):
+        async def failing_send(data: bytes) -> None:
+            raise ValueError("invalid transport state")
+
+        async def recv() -> bytes:
+            return b""
+
+        proto = PGProtocol(failing_send, recv)
+        with pytest.raises(ValueError, match="invalid transport state"):
+            await proto.terminate()
+
+
 class TestPGProtocolChunkedTransport:
     @pytest.mark.asyncio
     async def test_startup_over_chunked_transport(self):

@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 import aiohttp
 import sqlalchemy as sa
 from sqlalchemy.engine.result import IteratorResult, SimpleResultMetaData
+from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.inspection import inspect as sa_inspect
 from sqlalchemy.sql import ClauseElement
 
@@ -336,7 +337,7 @@ def _extract_single_entity(statement: ClauseElement | None) -> tuple[str, Any] |
 
     try:
         mapper = sa_inspect(entity)
-    except Exception:
+    except NoInspectionAvailable:
         return None
 
     if not hasattr(mapper, "column_attrs"):
@@ -356,7 +357,7 @@ def _validate_orm_result_shape(statement: ClauseElement) -> None:
             continue
         try:
             mapper = sa_inspect(entity)
-        except Exception:
+        except NoInspectionAvailable:
             continue
         if hasattr(mapper, "column_attrs"):
             mapped_descriptions.append(description)
@@ -418,7 +419,7 @@ def _row_to_entity(
                 if processor is not None and value is not None:
                     try:
                         value = processor(value)
-                    except Exception:
+                    except (TypeError, ValueError, OverflowError):
                         pass
                 values[attr.key] = value
                 break
@@ -462,7 +463,7 @@ def _apply_type_processors(
                 continue
             try:
                 converted[idx] = processor(value)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 # Rows may already be converted by the HTTP layer.
                 converted[idx] = value
         converted_rows.append(tuple(converted))

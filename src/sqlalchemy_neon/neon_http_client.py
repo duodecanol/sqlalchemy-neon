@@ -149,7 +149,6 @@ class AsyncNeonHTTPClient:
         )
         self._fetch_endpoint = fetch_endpoint
         self._fetch_function = fetch_function
-        self._url = self._resolve_fetch_url(jwt_auth=bool(auth_token))
         self._external_client: bool = (
             http_client is not None
             and not callable(http_client)
@@ -610,19 +609,41 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
         if protocol is not None:
             try:
                 await protocol.terminate()
-            except Exception:
+            except (
+                asyncio.CancelledError,
+                asyncio.TimeoutError,
+                aiohttp.ClientError,
+                AttributeError,
+                NeonConnectionError,
+                OSError,
+                RuntimeError,
+            ):
                 pass
         if websocket is not None:
             try:
                 await websocket.close()
-            except Exception:
+            except (
+                asyncio.CancelledError,
+                asyncio.TimeoutError,
+                aiohttp.ClientError,
+                AttributeError,
+                OSError,
+                RuntimeError,
+            ):
                 pass
 
     async def _quarantine_connection(self) -> None:
         """Detach an uncertain connection without masking the original error."""
         try:
             await self.force_close()
-        except BaseException:
+        except (
+            asyncio.CancelledError,
+            asyncio.TimeoutError,
+            aiohttp.ClientError,
+            NeonConnectionError,
+            OSError,
+            RuntimeError,
+        ):
             pass
 
     def _pg_result_to_query_result(
@@ -807,7 +828,16 @@ class AsyncNeonWebSocketClient(AsyncNeonHTTPClient):
                 if protocol is not None:
                     try:
                         await protocol.simple_query("ROLLBACK")
-                    except BaseException:
+                    except (
+                        asyncio.CancelledError,
+                        asyncio.TimeoutError,
+                        aiohttp.ClientError,
+                        NeonConnectionError,
+                        NeonQueryError,
+                        NeonTransactionError,
+                        OSError,
+                        RuntimeError,
+                    ):
                         pass
                 await self._quarantine_connection()
                 raise
@@ -937,7 +967,16 @@ class AsyncNeonWebSocketPool:
         except BaseException:
             try:
                 await self._discard(client)
-            except BaseException:
+            except (
+                asyncio.CancelledError,
+                asyncio.TimeoutError,
+                aiohttp.ClientError,
+                NeonConnectionError,
+                NeonQueryError,
+                NeonTransactionError,
+                OSError,
+                RuntimeError,
+            ):
                 pass
             raise
         else:

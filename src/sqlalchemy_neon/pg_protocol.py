@@ -877,7 +877,7 @@ class PGProtocol:
         """Send Terminate message to close the connection gracefully."""
         try:
             await self._send(_build_terminate_message())
-        except Exception:
+        except (asyncio.CancelledError, ConnectionError, OSError, RuntimeError):
             pass
 
     # ------------------------------------------------------------------
