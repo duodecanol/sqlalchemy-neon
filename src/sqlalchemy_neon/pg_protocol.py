@@ -13,8 +13,9 @@ import hashlib
 import hmac
 import secrets
 import struct
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from dataclasses import dataclass
+from typing import Awaitable, Callable
+
 from .errors import (
     NeonAuthenticationError,
     NeonConnectionError,

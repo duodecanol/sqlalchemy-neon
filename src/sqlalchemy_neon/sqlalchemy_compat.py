@@ -68,7 +68,8 @@ def loader_strategy(context: Any) -> tuple[tuple[str, Any], ...]:
 
 def strip_loader_options(statement: ClauseElement) -> ClauseElement:
     """Clone a statement without ORM loader options."""
-    stripped = statement._generate()
+    statement_internal: Any = statement
+    stripped = statement_internal._generate()
     stripped._with_options = ()
     return stripped
 

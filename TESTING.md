@@ -18,6 +18,29 @@ The integration database is intentionally not provisioned by this repository.
 Do not use production credentials or rotate external credentials as part of a
 local test run.
 
+## CI Workflows
+
+- **Offline checks** (`.github/workflows/tests.yml`) run on every pull request
+  and push. They run `uv build`, production-source Ruff checks, a mypy check
+  for the SQLAlchemy compatibility boundary, and the offline unit suite across
+  Python 3.11/3.12 and SQLAlchemy 2.0.0/2.0.46. They do not receive database
+  credentials.
+- **Secret scan** (`.github/workflows/secret-scan.yml`) runs on every pull
+  request and push.
+- **Protected integration** (`.github/workflows/integration.yml`) runs only
+  from the canonical repository by manual dispatch or the scheduled
+  main-branch trigger. It requires approval for the `neon-integration`
+  environment and receives only its configured protected secrets. The
+  environment must point to a disposable Neon branch/database; the workflow
+  does not provision or target a shared production database. The test safety
+  fixture still requires the exact database allowlist before issuing DDL.
+
+The protected integration command is:
+
+```bash
+uv run --group dev pytest tests/integration -v
+```
+
 ## Test Structure
 
 ### Unit Tests (No Database Required)

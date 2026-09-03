@@ -157,8 +157,10 @@ ENABLE_TEST_TELEMETRY=0 LOGFIRE_TOKEN= \
   uv run --group dev pytest tests/units -q
 ```
 
-The clean-checkout test lane is the unit suite above. Run live integration
-tests separately only after configuring the protected variables in `TESTING.md`.
+The pull-request CI is credential-free: `.github/workflows/tests.yml` runs
+offline tests, packaging, and production quality checks; the separate
+`.github/workflows/secret-scan.yml` checks secrets. Live integration uses the
+protected manual/scheduled workflow described in `TESTING.md`.
 
 ### Test Coverage (Optional)
 
