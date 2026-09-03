@@ -1,8 +1,8 @@
 # Testing Guide for SQLAlchemy Neon Driver
 
-## Overview
-
-This package includes comprehensive integration tests that validate all major SQLAlchemy query patterns and database operations against a live Neon database.
+This repository tests the native async statement executor against mocked
+transports and, when explicitly configured, a protected live Neon database.
+It is not a SQLAlchemy dialect or `Session` implementation.
 
 > [!WARNING]
 > Integration fixtures run `drop_all()` and `create_all()` against the target
@@ -10,226 +10,143 @@ This package includes comprehensive integration tests that validate all major SQ
 > only. The suite refuses DDL unless its test-only URL, an explicit destructive
 > opt-in, and an exact database-name allowlist are all configured.
 
-## Credential Rotation
+## Credentials and Safety
 
-Treat a credential exposed outside an approved secret store as compromised. Reset
-the Neon database role password through the [Neon Console or reset-role-password
-API](https://api.neon.tech/reference/reset-role-password), then replace the
-connection string only in local secret files and CI secret stores. The old
-connection string stops working after a password reset.
-
-- Keep local credentials in ignored files such as `.envrc`; never commit, paste,
-  or print them.
-- Update `NEON_TEST_DATABASE_URL` and any deployment secret after rotation.
-- Revoke or replace related API and telemetry tokens if they were exposed with
-  the connection string.
-- Run the repository secret scan before opening a pull request; the
-  `Secret scan` workflow enforces this on pushes and pull requests.
+Keep local credentials in ignored files such as `.envrc`; never commit, paste,
+or print them. The `Secret scan` workflow checks pushes and pull requests.
+The integration database is intentionally not provisioned by this repository.
+Do not use production credentials or rotate external credentials as part of a
+local test run.
 
 ## Test Structure
 
 ### Unit Tests (No Database Required)
 
-These tests mock the database connection and test individual components:
+Unit tests use fake HTTP/WebSocket clients and protocol fixtures:
 
-- `tests/test_dbapi.py` - DBAPI module compliance tests
-- `tests/test_types.py` - Type conversion tests
-- `tests/test_http_client.py` - HTTP client tests
-- `tests/test_dialect.py` - Dialect configuration tests
+- `tests/units/test_native_async_engine.py`
+- `tests/units/test_types.py`
+- `tests/units/test_http_client.py`
+- `tests/units/test_pg_protocol.py`
+- `tests/units/test_neon_test_safety.py`
 
-Run unit tests:
+Run them from a synced checkout:
+
 ```bash
-pytest tests/ -k "not integration" -v
+ENABLE_TEST_TELEMETRY=0 LOGFIRE_TOKEN= \
+  uv run --group dev pytest tests/units -q
 ```
 
-### Integration Tests (Requires Live Database)
+### Integration Tests (Protected Live Database)
 
-`tests/integration/` contains comprehensive integration tests covering:
+Integration tests require a dedicated disposable Neon database. They use
+`NeonNativeAsyncEngine` directly; they do not test `Session` or
+`AsyncSession` semantics. The current integration tree contains:
 
-#### Test Models
+- `tests/integration/test_integration_basics.py`: async CRUD, filters,
+  aggregates, relationships, and type coverage.
+- `tests/integration/test_integration_hard.py`: nested loader options and
+  concurrent native queries.
+- `tests/integration/test_pipeline.py`: WebSocket protocol integration.
 
-The integration tests use a realistic blog-style schema:
-
-- **User**: Users with profiles (JSONB), UUIDs, dates
-- **Post**: Blog posts with author relationship
-- **Comment**: Comments with relationships to posts and users
-- **Tag**: Tags with many-to-many relationship to posts
-- **Product**: Products with decimal pricing (for numeric type testing)
-
-#### Test Coverage
-
-**Synchronous Tests (`TestSync*` classes):**
-
-1. **Basic CRUD** (`TestSyncBasicCRUD`)
-   - Insert single/multiple records
-   - Select by ID, select all
-   - Update attributes
-   - Delete records
-
-2. **Query Patterns** (`TestSyncQueryPatterns`)
-   - Equality/inequality filters
-   - AND/OR conditions
-   - IN operator
-   - LIKE pattern matching
-   - NULL checks
-   - ORDER BY (ascending/descending)
-   - LIMIT and OFFSET
-
-3. **Aggregations** (`TestSyncAggregations`)
-   - COUNT (all, with filters)
-   - SUM, AVG, MIN, MAX
-   - GROUP BY with aggregates
-
-4. **Relationships** (`TestSyncRelationships`)
-   - One-to-many (User → Posts)
-   - Many-to-one (Post → User)
-   - Many-to-many (Post ↔ Tags)
-   - Nested relationships (User → Post → Comments)
-   - JOIN queries
-
-5. **Transactions** (`TestSyncTransactions`)
-   - Commit operations
-   - Rollback operations
-   - Nested transactions with savepoints
-
-6. **Data Types** (`TestSyncJSONB`, `TestSyncNumeric`, `TestSyncDateTime`, `TestSyncUUID`)
-   - JSONB insert/update/query
-   - Decimal precision
-   - Date and DateTime handling
-   - UUID generation and querying
-
-**Asynchronous Tests (`TestAsync*` classes):**
-
-Parallel async versions of the key test categories:
-- Basic CRUD operations
-- Query patterns with filters
-- Joins and relationships
-- Aggregations
-- Transaction management
+The integration models cover users, posts, comments, tags, products, and
+complex JSON/type values. DDL is destructive and guarded by the environment
+variables below.
 
 ## Running Integration Tests
 
 ### Prerequisites
 
-1. Set up a Neon database (free tier works fine)
-2. Get your connection string from the Neon dashboard
-3. Export it as an environment variable
+1. Provision a dedicated disposable Neon database.
+2. Ensure its database name is known for the exact allowlist.
+3. Use credentials only in local environment variables or ignored files.
 
 ### Setup
 
+From the repository root:
+
 ```bash
-# Configure a dedicated disposable test database. It is dropped and recreated.
+uv sync --group dev
 export NEON_TEST_DATABASE_URL="postgresql://username:password@ep-xyz.us-east-1.aws.neon.tech/neondb_test"
 export NEON_TEST_ALLOWED_DATABASES="neondb_test"
 export NEON_TEST_ALLOW_DESTRUCTIVE=1
-
-# Activate virtual environment
-source .venv/bin/activate
-
-# Install test dependencies
-pip install -e ".[dev]"
 ```
 
 ### Run Tests
 
 ```bash
-# Run all integration tests
-pytest tests/integration -v
-
-# Run specific test class
-pytest tests/integration/test_integration_basics.py::TestAsyncBasicCRUD -v
-
-# Run specific test
-pytest tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_single_user -v
-
-# Run only sync tests
-pytest tests/integration -k "Sync" -v
-
-# Run only async tests
-pytest tests/integration -k "Async" -v
-
-# Show detailed output
-pytest tests/integration -v -s
+uv run --group dev pytest tests/integration -v
 ```
 
-### Expected Results
+Run a specific class or test:
 
-All tests should pass with a live Neon connection:
-
+```bash
+uv run --group dev pytest \
+  tests/integration/test_integration_basics.py::TestAsyncBasicCRUD -v
+uv run --group dev pytest \
+  tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_single_user -v
 ```
-tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_single_user PASSED
-tests/integration/test_integration_basics.py::TestAsyncBasicCRUD::test_insert_multiple_users PASSED
-...
-tests/integration/test_pipeline.py::test_pipeline_happy_path PASSED
-tests/integration/test_pipeline.py::test_pipeline_query_error PASSED
-...
 
-================= XX passed in X.XXs =================
+Run with detailed output:
+
+```bash
+uv run --group dev pytest tests/integration -v -s
 ```
+
+Without all three `NEON_TEST_*` variables, destructive integration fixtures
+skip or fail closed before issuing DDL. A successful run reports the ordinary
+pytest pass/skip summary.
 
 ## Query Patterns Tested
 
-The integration tests demonstrate authentic SQLAlchemy query patterns:
+The integration suite uses `NeonNativeAsyncEngine` directly:
 
-### Simple Queries
 ```python
-# Select all
-stmt = select(User)
-users = session.execute(stmt).scalars().all()
+import sqlalchemy as sa
 
-# Filter by equality
-stmt = select(User).where(User.username == "alice")
-user = session.execute(stmt).scalar_one()
+result = await neondb.execute(
+    sa.text("SELECT username FROM users WHERE is_active = :active"),
+    {"active": True},
+)
+active_names = result.scalars().all()
+```
 
-# Filter with AND
-stmt = select(User).where(
-    and_(User.is_active == True, User.username.like("%a%"))
+For one mapped entity:
+
+```python
+stmt = sa.select(User).where(User.username == "alice")
+result = await neondb.execute(stmt)
+user = result.scalar_one()
+```
+
+Supported relationship options include `selectinload`, `subqueryload`,
+`joinedload` (implemented as a separate native relationship query), and
+`noload`. Multi-entity and entity-plus-column ORM selections, `lazyload`, and
+`raiseload` are explicitly unsupported and raise `NotSupportedError`.
+
+Use Core columns for multi-value results:
+
+```python
+stmt = sa.select(User.username, sa.func.count(User.id)).group_by(User.username)
+result = await neondb.execute(stmt)
+rows = result.all()
+```
+
+Native transaction batches are explicit:
+
+```python
+results = await neondb.transaction(
+    [
+        (sa.text("UPDATE users SET is_active = :active WHERE id = :id"), {
+            "active": False,
+            "id": user.id,
+        }),
+    ],
 )
 ```
 
-### Joins and Relationships
-```python
-# JOIN query
-stmt = (
-    select(Post, User)
-    .join(User, Post.author_id == User.id)
-    .where(User.username == "alice")
-)
-
-# Access relationships
-user.posts  # All posts by user
-post.author  # Post's author
-post.tags  # Many-to-many tags
-```
-
-### Aggregations
-```python
-# COUNT
-stmt = select(func.count()).select_from(User)
-count = session.execute(stmt).scalar()
-
-# GROUP BY
-stmt = (
-    select(User.is_active, func.count(User.id))
-    .group_by(User.is_active)
-)
-```
-
-### Transactions
-```python
-# Auto-commit
-session.add(user)
-session.commit()
-
-# Rollback
-session.add(user)
-session.rollback()
-
-# Nested transactions
-with session.begin_nested():
-    session.add(user)
-    session.rollback()
-```
+The native engine does not provide `Session.commit()`, rollback methods,
+savepoints, or autocommit mode.
 
 ## Troubleshooting
 
@@ -264,77 +181,46 @@ The tests use `scope="module"` fixtures that clean up after themselves. If tests
 2. Manually clean up only that disposable test database if needed.
 3. Re-run tests.
 
-### Async test failures
+### Missing development dependencies
 
-Ensure you have `pytest-asyncio` installed:
+Synchronize the configured development group from the repository root:
+
 ```bash
-pip install pytest-asyncio
+uv sync --group dev
 ```
 
 ## Coverage Report
 
-Generate a coverage report:
+Generate a unit-test coverage report without modifying project dependencies:
 
 ```bash
-pytest tests/test_integration.py --cov=sqlalchemy_neon --cov-report=html --cov-report=term
-```
-
-View the HTML report:
-```bash
-open htmlcov/index.html  # macOS
-xdg-open htmlcov/index.html  # Linux
+uv run --with pytest-cov pytest tests/units -q \
+  --cov=sqlalchemy_neon --cov-report=term-missing
 ```
 
 ## Continuous Integration
 
-To run these tests in CI/CD:
+The repository currently runs the secret scan workflow on pushes and pull
+requests. Run the offline unit lane with:
 
-1. Store `NEON_TEST_DATABASE_URL` as a secret environment variable.
-2. Set `NEON_TEST_ALLOWED_DATABASES` to its exact dedicated test database name.
-3. Set `NEON_TEST_ALLOW_DESTRUCTIVE=1` only in the job that runs destructive tests.
-4. Use a dedicated disposable Neon branch or database, never production.
-
-Example GitHub Actions workflow:
-
-```yaml
-name: Integration Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - run: pip install -e ".[dev]"
-      - run: pytest tests/integration -v
-        env:
-          NEON_TEST_DATABASE_URL: ${{ secrets.NEON_TEST_DATABASE_URL }}
-          NEON_TEST_ALLOWED_DATABASES: neondb_test
-          NEON_TEST_ALLOW_DESTRUCTIVE: "1"
+```bash
+uv sync --group dev
+ENABLE_TEST_TELEMETRY=0 LOGFIRE_TOKEN= \
+  uv run --group dev pytest tests/units -q
 ```
+
+If a protected integration lane is configured, provide
+`NEON_TEST_DATABASE_URL`, `NEON_TEST_ALLOWED_DATABASES`, and
+`NEON_TEST_ALLOW_DESTRUCTIVE=1` only to that job. It must use a dedicated
+disposable database and the integration command above.
 
 ## Adding New Tests
 
-When adding new integration tests:
+Use the existing `test_*` naming convention and keep tests aligned with the
+native executor contract:
 
-1. Follow the existing naming convention (`test_*`)
-2. Use appropriate fixtures (`sync_session`, `async_session`)
-3. Clean up test data (fixtures handle this automatically)
-4. Test both sync and async versions if applicable
-5. Document what SQL pattern the test demonstrates
-
-Example:
-
-```python
-class TestSyncNewFeature:
-    """Test new feature with sync engine."""
-
-    def test_new_query_pattern(self, sync_session: Session):
-        """Test a new query pattern - demonstrates CTEs."""
-        # Your test here
-        pass
-```
+1. Put isolated component tests under `tests/units/` with fake transports.
+2. Put live database tests under `tests/integration/`.
+3. Use the `neondb` fixture for native async integration tests.
+4. Add behavior-level coverage for supported or explicitly rejected semantics.
+5. Keep destructive setup and cleanup inside the protected integration fixtures.
