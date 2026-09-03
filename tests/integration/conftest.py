@@ -30,7 +30,7 @@ def object_propagator(require_destructive_neon):
 
     with logfire.span("Pytest: object_propagator"):
         neon_url = require_destructive_neon.replace("postgresql://", "postgresql+psycopg://")
-        engine = create_engine(neon_url, echo=True)
+        engine = create_engine(neon_url)
 
         # Create all tables
         with engine.begin() as connection:

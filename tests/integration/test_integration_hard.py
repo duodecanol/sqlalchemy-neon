@@ -78,22 +78,31 @@ async def seeded_data(neondb: NeonNativeAsyncEngine, unique_prefix: str):
         comments.append(comment)
     await neondb.add_all(comments)
 
+    user_ids = [u.id for u in users]
+    post_ids = [p.id for p in posts]
+    tag_ids = [t.id for t in tags]
     try:
         yield {
-            "user_ids": [u.id for u in users],
-            "post_ids": [p.id for p in posts],
-            "tag_ids": [t.id for t in tags],
+            "user_ids": user_ids,
+            "post_ids": post_ids,
+            "tag_ids": tag_ids,
         }
     finally:
-        # !!!!!!!!!!!!!!!!!!!!!!!! deactivated cleanup for debugging !!!!!!!!!!!!!!!!!!!!!!!!!
-        ...
-        # await neondb.execute(
-        #     sa.delete(User).where(User.username.like(f"{unique_prefix}_user_%"))
-        # )
-        # await neondb.execute(
-        #     sa.delete(Tag).where(Tag.name.like(f"{unique_prefix}_tag_%"))
-        # )
-
+        await neondb.transaction(
+            [
+                (
+                    sa.delete(Comment).where(Comment.post_id.in_(post_ids)),
+                    None,
+                ),
+                (
+                    sa.delete(post_tags).where(post_tags.c.post_id.in_(post_ids)),
+                    None,
+                ),
+                (sa.delete(Post).where(Post.id.in_(post_ids)), None),
+                (sa.delete(Tag).where(Tag.id.in_(tag_ids)), None),
+                (sa.delete(User).where(User.id.in_(user_ids)), None),
+            ]
+        )
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestHardIntegration:
