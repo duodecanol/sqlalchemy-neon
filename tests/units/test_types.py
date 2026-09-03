@@ -7,6 +7,8 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from sqlalchemy_neon.errors import NeonTypeError
+
 
 from sqlalchemy_neon.types import TypeConverter, PostgresOID, build_cursor_description
 
@@ -115,6 +117,26 @@ class TestTypeConverter:
         """Test text -> str conversion."""
         result = converter.pg_to_python("hello", PostgresOID.TEXT)
         assert result == "hello"
+
+    def test_pg_to_python_unknown_oid_returns_raw_value(
+        self, converter: TypeConverter
+    ):
+        """Unknown server type OIDs preserve their text value."""
+        assert converter.pg_to_python("opaque-server-value", 999999) == "opaque-server-value"
+
+    def test_pg_to_python_malformed_known_oid_raises_safe_type_error(
+        self, converter: TypeConverter
+    ):
+        """Known OID conversion errors expose metadata but never the raw value."""
+        malformed_value = "malformed-value-that-must-not-leak"
+
+        with pytest.raises(NeonTypeError) as exc_info:
+            converter.pg_to_python(malformed_value, PostgresOID.INT4)
+
+        error = str(exc_info.value)
+        assert "OID 23" in error
+        assert "int4" in error
+        assert malformed_value not in error
 
 
 class TestBuildCursorDescription:
