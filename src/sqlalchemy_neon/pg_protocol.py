@@ -7,6 +7,7 @@ SCRAM-SHA-256), simple query protocol, and extended query protocol.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -23,6 +24,8 @@ from .errors import (
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+MAX_MESSAGE_SIZE = 16 * 1024 * 1024
+
 
 PG_PROTOCOL_VERSION = 196608  # (3 << 16) | 0
 
@@ -127,17 +130,39 @@ class _BufferedReader:
     This reader maintains an internal buffer and serves exact byte counts.
     """
 
-    __slots__ = ("_recv", "_buffer", "_pos")
+    __slots__ = ("_recv", "_buffer", "_pos", "_read_timeout")
 
-    def __init__(self, recv_fn: Callable[[], Awaitable[bytes]]) -> None:
+    def __init__(
+        self,
+        recv_fn: Callable[[], Awaitable[bytes]],
+        *,
+        read_timeout: float | None = None,
+    ) -> None:
         self._recv = recv_fn
         self._buffer = bytearray()
         self._pos = 0
+        self._read_timeout = read_timeout
 
-    async def read_exact(self, n: int) -> bytes:
-        """Read exactly *n* bytes, pulling from the source as needed."""
+    def _deadline(self) -> float | None:
+        if self._read_timeout is None:
+            return None
+        return asyncio.get_running_loop().time() + self._read_timeout
+
+    async def _read_exact(self, n: int, deadline: float | None) -> bytes:
         while (self._pos + n) > len(self._buffer):
-            chunk = await self._recv()
+            timeout = None
+            if deadline is not None:
+                timeout = deadline - asyncio.get_running_loop().time()
+                if timeout <= 0:
+                    raise NeonConnectionError("Protocol read timed out.")
+            try:
+                chunk = (
+                    await asyncio.wait_for(self._recv(), timeout)
+                    if timeout is not None
+                    else await self._recv()
+                )
+            except asyncio.TimeoutError as exc:
+                raise NeonConnectionError("Protocol read timed out.") from exc
             if not chunk:
                 raise NeonConnectionError("Connection closed while reading")
             self._buffer.extend(chunk)
@@ -152,6 +177,10 @@ class _BufferedReader:
 
         return result
 
+    async def read_exact(self, n: int) -> bytes:
+        """Read exactly *n* bytes, pulling from the source as needed."""
+        return await self._read_exact(n, self._deadline())
+
     @property
     def has_pending_data(self) -> bool:
         """Whether unread PostgreSQL wire bytes remain in the buffer."""
@@ -163,15 +192,24 @@ class _BufferedReader:
         Returns ``(message_type, payload)`` where *payload* does **not**
         include the 4-byte length field.
         """
-        header = await self.read_exact(5)  # 1 type + 4 length
+        deadline = self._deadline()
+        header = await self._read_exact(5, deadline)  # 1 type + 4 length
         msg_type = header[0]
         (length,) = struct.unpack("!I", header[1:5])
-        payload_len = length - 4
-        if payload_len < 0:
+        if length < 4:
             raise NeonConnectionError(
                 f"Invalid message length {length} for type {chr(msg_type)}"
             )
-        payload = await self.read_exact(payload_len) if payload_len > 0 else b""
+        if length > MAX_MESSAGE_SIZE:
+            raise NeonConnectionError(
+                f"Message length {length} exceeds maximum {MAX_MESSAGE_SIZE}"
+            )
+        payload_len = length - 4
+        payload = (
+            await self._read_exact(payload_len, deadline)
+            if payload_len > 0
+            else b""
+        )
         return msg_type, payload
 
 
@@ -435,9 +473,10 @@ class PGProtocol:
         recv_fn: Callable[[], Awaitable[bytes]],
         *,
         allow_insecure_password_auth: bool = True,
+        read_timeout: float | None = None,
     ) -> None:
         self._send = send_fn
-        self._reader = _BufferedReader(recv_fn)
+        self._reader = _BufferedReader(recv_fn, read_timeout=read_timeout)
         self._server_params: dict[str, str] = {}
         self._backend_pid: int = 0
         self._backend_secret: int = 0
