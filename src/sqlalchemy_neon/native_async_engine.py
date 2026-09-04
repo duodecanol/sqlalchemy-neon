@@ -183,23 +183,23 @@ def _apply_python_dml_defaults(
     parameter_keys = set(parameters) if isinstance(parameters, Mapping) else set()
     defaults: dict[str, Any] = {}
 
-    for column in statement.table.columns:
+    for dml_column in statement.table.columns:
         default = (
-            column.default
+            dml_column.default
             if isinstance(statement, sa.sql.dml.Insert)
-            else column.onupdate
+            else dml_column.onupdate
         )
         if (
             default is None
-            or column.key in explicit_columns
-            or column.key in parameter_keys
+            or dml_column.key in explicit_columns
+            or dml_column.key in parameter_keys
             or getattr(default, "is_clause_element", False)
         ):
             continue
 
         resolved = _resolve_python_default(default)
         if resolved is not _NO_DEFAULT:
-            defaults[column.key] = resolved
+            defaults[dml_column.key] = resolved
 
     if (
         isinstance(statement, sa.sql.dml.Insert)
@@ -536,6 +536,7 @@ class NeonNativeAsyncEngine:
                 raise TypeError(
                     "http_client must be an aiohttp.ClientSession or a callable returning one"
                 )
+        self._client: AsyncNeonHTTPClient | AsyncNeonWebSocketPool
         if transport == "http":
             self._client = AsyncNeonHTTPClient(
                 connection_string,
