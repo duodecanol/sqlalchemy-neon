@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime
 from uuid import UUID, uuid4
+from typing import Any, cast
 
 import sqlalchemy as sa
 from sqlalchemy import orm
@@ -18,12 +19,18 @@ from sqlalchemy_neon.native_async_engine import (
     create_neon_ws_engine,
 )
 from sqlalchemy_neon.neon_http_client import (
+    AsyncNeonHTTPClient,
+    AsyncNeonWebSocketPool,
     IsolationLevel,
     QueryResult,
     TransactionOptions,
 )
 from sqlalchemy_neon.types import PostgresOID
 from testsupport.models import User, Post, Comment
+
+
+def _set_transport(engine: NeonNativeAsyncEngine, client: Any) -> None:
+    engine._client = cast(AsyncNeonHTTPClient | AsyncNeonWebSocketPool, client)
 
 
 def test_compile_sql_string_with_positional_params():
@@ -64,6 +71,8 @@ def test_native_engine_forwards_transport_size_limits(
         max_result_size=512,
     )
 
+    assert isinstance(http_engine._client, AsyncNeonHTTPClient)
+    assert isinstance(ws_engine._client, AsyncNeonWebSocketPool)
     assert http_engine._client._max_response_size == 128
     assert ws_engine._client._max_message_size == 256
     assert ws_engine._client._max_result_size == 512
@@ -86,7 +95,7 @@ async def test_native_engine_execute_forwards_to_client(mock_connection_string: 
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     result = await engine.execute(sa.text("select :x as v"), {"x": 1})
 
@@ -121,7 +130,7 @@ async def test_native_engine_execute_applies_core_insert_defaults(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     await engine.execute(table.insert())
 
@@ -153,7 +162,7 @@ async def test_native_engine_execute_preserves_explicit_core_insert_values(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     await engine.execute(
         table.insert().values(value=0, label=None),
@@ -186,7 +195,7 @@ async def test_native_engine_execute_preserves_mapping_insert_values(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     await engine.execute(table.insert(), {"name": "alice"})
 
@@ -219,7 +228,7 @@ async def test_native_engine_execute_applies_multirow_insert_defaults(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     await engine.execute(
         table.insert().values([{"name": "alice"}, {"name": "bob"}]),
@@ -253,7 +262,7 @@ async def test_native_engine_execute_applies_core_update_onupdate(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     await engine.execute(
         table.update().where(table.c.id == 1).values(value=9),
@@ -284,7 +293,7 @@ async def test_native_engine_preserves_unknown_oid_value(
             )
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     result = await engine.execute("SELECT value")
 
@@ -307,7 +316,7 @@ async def test_native_engine_raises_safe_error_for_malformed_known_oid(
             )
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     with pytest.raises(NeonTypeError) as exc_info:
         await engine.execute("SELECT value")
@@ -429,7 +438,7 @@ async def test_native_engine_transaction_forwards_compiled_statements(
             return None
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     results = await engine.transaction(
         [
@@ -461,7 +470,7 @@ async def test_native_engine_transaction_defaults_allow_writes(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     await engine.transaction(
         [
@@ -502,7 +511,7 @@ async def test_native_engine_transaction_preserves_explicit_read_only_options(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
     options = TransactionOptions(
         isolation_level=IsolationLevel.SERIALIZABLE,
         read_only=True,
@@ -549,7 +558,7 @@ async def test_native_engine_add_all_uses_single_transaction(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     users = [
         User(username="alice", email="alice@example.com"),
@@ -604,6 +613,8 @@ async def test_native_engine_add_preserves_natural_uuid_and_composite_keys(
             self.value = value
 
     class UUIDKey:
+        id: UUID
+
         def __init__(self, value):
             self.value = value
 
@@ -633,7 +644,7 @@ async def test_native_engine_add_preserves_natural_uuid_and_composite_keys(
     composite = CompositeKey("tenant-1", 7, "composite")
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     await engine.add_all([natural, generated_uuid, composite])
 
@@ -669,7 +680,7 @@ async def test_native_engine_delete_all_uses_single_transaction(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     users = [
         User(id=21, username="alice", email="alice@example.com"),
@@ -758,7 +769,7 @@ async def test_native_engine_rejects_unsupported_orm_result_shapes(
             raise AssertionError("unsupported ORM result must be rejected first")
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     for statement in (sa.select(User, Post), sa.select(User, Post.title)):
         with pytest.raises(
@@ -795,7 +806,7 @@ async def test_native_engine_preserves_single_orm_column_result(
             )
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     result = await engine.execute(sa.select(User.id))
 
@@ -825,7 +836,7 @@ async def test_native_engine_preserves_core_multi_column_result(
             )
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     result = await engine.execute(sa.select(rows.c.left_value, rows.c.right_value))
 
@@ -849,7 +860,7 @@ async def test_native_engine_preserves_multiple_orm_column_result(
             )
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     result = await engine.execute(sa.select(User.id, User.username))
 
@@ -883,12 +894,16 @@ async def test_native_engine_hydrates_composite_relationship_identity(
     registry = orm.registry()
 
     class CompositeParent:
+        children: orm.Mapped[list[CompositeChild]]
+
         def __init__(self, tenant=None, key=None, name=None):
             self.tenant = tenant
             self.key = key
             self.name = name
 
     class CompositeChild:
+        parent: orm.Mapped[CompositeParent]
+
         def __init__(self, id=None, tenant=None, parent_key=None, value=None):
             self.id = id
             self.tenant = tenant
@@ -973,7 +988,7 @@ async def test_native_engine_hydrates_composite_relationship_identity(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     result = await engine.execute(
         sa.select(CompositeParent).options(orm.selectinload(CompositeParent.children))
@@ -1012,7 +1027,7 @@ async def test_native_engine_noload_skips_relationship_query(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     result = await engine.execute(sa.select(User).options(orm.noload(User.posts)))
     user = result.scalar_one()
@@ -1030,7 +1045,7 @@ async def test_native_engine_rejects_unsupported_relationship_strategies(
             raise AssertionError("unsupported loader must be rejected first")
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
-    engine._client = FakeClient()
+    _set_transport(engine, FakeClient())
 
     for option in (orm.raiseload(User.posts), orm.lazyload(User.posts)):
         with pytest.raises(NotSupportedError, match="Loader strategy"):
@@ -1199,7 +1214,7 @@ async def test_native_engine_hydrates_loader_option_relationships(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     stmt = (
         sa.select(Post)
@@ -1330,7 +1345,7 @@ async def test_native_engine_loads_sibling_relationships_concurrently(
 
     engine = NeonNativeAsyncEngine(mock_connection_string)
     fake = FakeClient()
-    engine._client = fake
+    _set_transport(engine, fake)
 
     stmt = (
         sa.select(Post)
