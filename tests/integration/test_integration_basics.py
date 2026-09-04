@@ -407,6 +407,7 @@ class TestAsyncAggregations:
         )
         result = await neondb.execute(stmt)
         avg_price = result.scalar()
+        assert avg_price is not None
         assert float(avg_price) == 15.0
 
         await neondb.delete_all(products)
