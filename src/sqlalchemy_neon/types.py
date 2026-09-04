@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime
 import re
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 from psycopg.adapt import PyFormat, Transformer
 from psycopg.postgres import register_default_adapters, register_default_types, types
@@ -88,22 +88,17 @@ class TypeConverter:
             value = "\\x" + value.hex()
 
         try:
-            # Use psycopg's dumper for text format
             dumper = self._transformer.get_dumper(value, PyFormat.TEXT)
+            # Psycopg text dumpers produce an optional buffer. Normalize every
+            # supported buffer type through bytes before decoding it.
             result = dumper.dump(value)
-
-            # Ensure we return a string
-            if isinstance(result, bytes):
-                result = result.decode("utf-8")
-            elif isinstance(result, bytearray):
-                result = result.decode("utf-8")
-            elif isinstance(result, memoryview):
-                result = bytes(result).decode("utf-8")
+            if result is None:
+                return None
+            return bytes(result).decode("utf-8")
         except Exception as e:
             raise NeonTypeError(
                 f"Failed to convert Python value to PostgreSQL: {e}"
             ) from e
-        return result
 
     def pg_to_python(self, value: str | None, oid: int) -> Any:
         """Convert a PostgreSQL text value to Python using the OID.
@@ -171,21 +166,23 @@ class TypeConverter:
             Tuple of converted values (for DBAPI compatibility) or dict.
         """
         if array_mode:
-            # Array mode: row is a list of values
-            converted = []
-            for i, value in enumerate(row):
+            # Array mode: row is a sequence of values.
+            array_row = cast(Sequence[Any], row)
+            converted_values: list[Any] = []
+            for i, value in enumerate(array_row):
                 oid = fields[i].get("dataTypeID", 25)  # Default to text
-                converted.append(self.pg_to_python(value, oid))
-            return tuple(converted)
-        else:
-            # Object mode: row is a dict
-            converted = {}
-            field_map = {f["name"]: f for f in fields}
-            for key, value in row.items():
-                field = field_map.get(key, {})
-                oid = field.get("dataTypeID", 25)  # Default to text
-                converted[key] = self.pg_to_python(value, oid)
-            return converted
+                converted_values.append(self.pg_to_python(value, oid))
+            return tuple(converted_values)
+
+        # Object mode: row is a dict.
+        object_row = cast(dict[str, Any], row)
+        converted_fields: dict[str, Any] = {}
+        field_map = {f["name"]: f for f in fields}
+        for key, value in object_row.items():
+            field = field_map.get(key, {})
+            oid = field.get("dataTypeID", 25)  # Default to text
+            converted_fields[key] = self.pg_to_python(value, oid)
+        return converted_fields
 
 
 # Common PostgreSQL OIDs for reference

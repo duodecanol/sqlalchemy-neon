@@ -5,14 +5,21 @@ Async HTTP and WebSocket clients for Neon serverless PostgreSQL API.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import re
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Sequence,
+    TypeAlias,
+)
 
 import aiohttp
 
@@ -47,7 +54,12 @@ _DRIVER_URL_PARAMETERS = frozenset(
         "fetch_function",
     }
 )
+
+HTTPClientFactory: TypeAlias = Callable[[], Awaitable[aiohttp.ClientSession]]
+HTTPClientSource: TypeAlias = aiohttp.ClientSession | HTTPClientFactory | None
+
 DEFAULT_MAX_RESPONSE_SIZE = MAX_MESSAGE_SIZE
+
 
 def _protocol_read_timeout(
     timeout: float | aiohttp.ClientTimeout | None,
@@ -55,6 +67,7 @@ def _protocol_read_timeout(
     if isinstance(timeout, aiohttp.ClientTimeout):
         return timeout.total if timeout.total is not None else timeout.sock_read
     return float(timeout) if timeout is not None else None
+
 
 def _validate_size_limit(name: str, value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -129,9 +142,7 @@ class AsyncNeonHTTPClient:
         self,
         connection_string: str,
         *,
-        http_client: aiohttp.ClientSession
-        | Callable[[], Awaitable[aiohttp.ClientSession]]
-        | None = None,
+        http_client: HTTPClientSource = None,
         auth_token: str | None = None,
         timeout: float | aiohttp.ClientTimeout | None = None,
         fetch_endpoint: str | Callable[[str, int, bool], str] | None = None,
@@ -149,16 +160,10 @@ class AsyncNeonHTTPClient:
         )
         self._fetch_endpoint = fetch_endpoint
         self._fetch_function = fetch_function
-        self._external_client: bool = (
-            http_client is not None
-            and not callable(http_client)
-            and not inspect.isawaitable(http_client)
+        self._external_client: bool = http_client is not None and not callable(
+            http_client
         )
-        self._http_client: (
-            aiohttp.ClientSession
-            | Callable[[], Awaitable[aiohttp.ClientSession]]
-            | None
-        ) = http_client
+        self._http_client: HTTPClientSource = http_client
         self._type_converter = TypeConverter()
 
     def _parse_connection_string(self, connection_string: str) -> "ParseResult":
@@ -251,14 +256,8 @@ class AsyncNeonHTTPClient:
         return None
 
     async def _ensure_client(self) -> aiohttp.ClientSession:
-        if inspect.isawaitable(self._http_client):
-            self._http_client = await self._http_client
-
         if callable(self._http_client):
-            maybe_client = self._http_client()
-            if inspect.isawaitable(maybe_client):
-                maybe_client = await maybe_client
-            self._http_client = maybe_client
+            self._http_client = await self._http_client()
 
         if self._http_client is None:
             self._http_client = aiohttp.ClientSession(timeout=self._client_timeout())
@@ -441,9 +440,7 @@ class AsyncNeonHTTPClient:
             await self.force_close()
 
     async def force_close(self) -> None:
-        if self._http_client is None:
-            return
-        if callable(self._http_client):
+        if self._http_client is None or callable(self._http_client):
             return
         await self._http_client.close()
         self._http_client = None
