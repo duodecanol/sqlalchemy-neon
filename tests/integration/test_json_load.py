@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 import sqlalchemy as sa
 import json
@@ -121,6 +123,7 @@ async def test_many_parameters(neondb: NeonNativeAsyncEngine):
     
     result = await neondb.execute(stmt, params)
     row = result.first()
+    assert row is not None
     assert len(row) == num_params
 
 @pytest.mark.asyncio
@@ -134,6 +137,7 @@ async def test_massive_parameters(neondb: NeonNativeAsyncEngine):
     
     result = await neondb.execute(stmt, params)
     row = result.first()
+    assert row is not None
     assert len(row) == num_params
 
 @pytest.mark.asyncio
@@ -243,7 +247,7 @@ async def test_extreme_mixed_payload(neondb: NeonNativeAsyncEngine):
 async def test_deep_json_payload(neondb: NeonNativeAsyncEngine):
     """Test a very deep JSON structure to check for recursion/depth limits."""
     # Generate 150 levels deep
-    curr = {"val": "bottom"}
+    curr: dict[str, Any] = {"val": "bottom"}
     for i in range(150):
         curr = {f"level_{i}": curr}
     

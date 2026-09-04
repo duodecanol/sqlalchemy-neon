@@ -42,7 +42,10 @@ def main() -> None:
         pkg_info = next(
             member for member in members if member.name.endswith("/PKG-INFO")
         )
-        sdist_metadata = _metadata(archive.extractfile(pkg_info).read())
+        metadata_file = archive.extractfile(pkg_info)
+        if metadata_file is None:
+            raise SystemExit("sdist PKG-INFO could not be extracted")
+        sdist_metadata = _metadata(metadata_file.read())
 
     with ZipFile(wheels[0]) as wheel:
         metadata_name = next(
